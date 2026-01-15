@@ -17,7 +17,15 @@ const theme = createTheme({
     },
   },
   typography: {
-    fontFamily: 'inherit',
+    fontFamily: [
+      '-apple-system',
+      'BlinkMacSystemFont',
+      '"Segoe UI"',
+      'Roboto',
+      '"Helvetica Neue"',
+      'Arial',
+      'sans-serif',
+    ].join(','),
   },
   components: {
     MuiButton: {

@@ -1,4 +1,4 @@
-import { Configuration, PlaidApi, PlaidEnvironments } from 'plaid';
+import { Configuration, PlaidApi, PlaidEnvironments, Products, CountryCode } from 'plaid';
 
 // Initialize Plaid client
 const configuration = new Configuration({
@@ -25,8 +25,8 @@ export async function createLinkToken(userId: string): Promise<string> {
         client_user_id: userId,
       },
       client_name: 'SpendFellow',
-      products: ['transactions'],
-      country_codes: ['US'],
+      products: [Products.Transactions],
+      country_codes: [CountryCode.Us],
       language: 'en',
     });
     
