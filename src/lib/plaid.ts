@@ -1,8 +1,18 @@
 import { Configuration, PlaidApi, PlaidEnvironments, Products, CountryCode } from 'plaid';
 
+// Validate environment variables
+if (!process.env.PLAID_CLIENT_ID || !process.env.PLAID_SECRET || !process.env.PLAID_ENV) {
+  throw new Error('Missing required Plaid environment variables: PLAID_CLIENT_ID, PLAID_SECRET, PLAID_ENV');
+}
+
+const plaidEnv = process.env.PLAID_ENV as keyof typeof PlaidEnvironments;
+if (!PlaidEnvironments[plaidEnv]) {
+  throw new Error(`Invalid PLAID_ENV: ${plaidEnv}. Must be one of: sandbox, development, production`);
+}
+
 // Initialize Plaid client
 const configuration = new Configuration({
-  basePath: PlaidEnvironments[process.env.PLAID_ENV as keyof typeof PlaidEnvironments] || PlaidEnvironments.sandbox,
+  basePath: PlaidEnvironments[plaidEnv],
   baseOptions: {
     headers: {
       'PLAID-CLIENT-ID': process.env.PLAID_CLIENT_ID,

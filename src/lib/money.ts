@@ -41,9 +41,17 @@ export function formatCurrency(cents: number, currency: string = 'USD'): string 
  * @returns Amount in cents
  */
 export function parseCurrencyToCents(value: string): number {
-  // Remove currency symbols, commas, and other non-numeric characters except decimal point
-  const numericValue = value.replace(/[^0-9.-]/g, '');
-  const dollars = parseFloat(numericValue);
+  // Remove currency symbols and whitespace
+  const cleaned = value.replace(/[$,\s]/g, '');
+  
+  // Validate format: optional minus sign, digits, optional decimal point and up to 2 digits
+  const currencyRegex = /^-?\d+(\.\d{1,2})?$/;
+  
+  if (!currencyRegex.test(cleaned)) {
+    throw new Error(`Invalid currency value: ${value}`);
+  }
+  
+  const dollars = parseFloat(cleaned);
   
   if (isNaN(dollars)) {
     throw new Error(`Invalid currency value: ${value}`);

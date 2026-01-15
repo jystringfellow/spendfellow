@@ -1,5 +1,6 @@
 'use client';
 
+import { Typography } from '@mui/material';
 import { formatCurrency } from '@/lib/money';
 
 interface MoneyDisplayProps {
@@ -37,5 +38,9 @@ export default function MoneyDisplay({
     }
   }
 
-  return <span style={{ color }}>{displayValue}</span>;
+  return (
+    <Typography component="span" sx={{ color }}>
+      {displayValue}
+    </Typography>
+  );
 }
