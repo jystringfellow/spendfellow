@@ -2,7 +2,9 @@ import type { Metadata } from 'next';
 import { AppRouterCacheProvider } from '@mui/material-nextjs/v14-appRouter';
 import { ThemeProvider } from '@mui/material/styles';
 import CssBaseline from '@mui/material/CssBaseline';
+import { Box } from '@mui/material';
 import theme from './theme';
+import Navigation from '@/components/layout/Navigation';
 
 export const metadata: Metadata = {
   title: 'SpendFellow - Personal Finance Tracker',
@@ -20,7 +22,12 @@ export default function RootLayout({
         <AppRouterCacheProvider>
           <ThemeProvider theme={theme}>
             <CssBaseline />
-            {children}
+            <Box sx={{ display: 'flex', flexDirection: 'column', minHeight: '100vh' }}>
+              <Navigation />
+              <Box component="main" sx={{ flexGrow: 1, bgcolor: 'background.default', py: 3 }}>
+                {children}
+              </Box>
+            </Box>
           </ThemeProvider>
         </AppRouterCacheProvider>
       </body>
