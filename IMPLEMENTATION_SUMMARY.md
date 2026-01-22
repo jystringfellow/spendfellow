@@ -183,9 +183,9 @@ The foundation is complete. Next steps for feature implementation:
 
 All quality checks passed:
 ```bash
-✅ npm run type-check    # TypeScript: No errors
-✅ npm run lint          # ESLint: No warnings or errors  
-✅ npm run build         # Build: Successful
+✅ pnpm type-check       # TypeScript: No errors
+✅ pnpm lint             # ESLint: No warnings or errors  
+✅ pnpm build            # Build: Successful
 ✅ CodeQL security scan  # 0 vulnerabilities
 ✅ Code review          # All feedback addressed
 ```

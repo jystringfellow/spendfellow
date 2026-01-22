@@ -165,10 +165,10 @@ See [DATABASE_SCHEMA.md](./DATABASE_SCHEMA.md) for complete schema documentation
 
 ### Local Development
 1. Clone repository
-2. Install dependencies: `npm install`
+2. Install dependencies: `pnpm install`
 3. Configure `.env.local` with Supabase and Plaid credentials
 4. Run migration in Supabase SQL editor
-5. Start dev server: `npm run dev`
+5. Start dev server: `pnpm dev`
 
 ### Testing
 - Unit tests for utilities (money, dates, etc.)
@@ -176,10 +176,10 @@ See [DATABASE_SCHEMA.md](./DATABASE_SCHEMA.md) for complete schema documentation
 - E2E tests for critical user flows
 
 ### Building
-- `npm run build`: Production build
-- `npm run start`: Start production server
-- `npm run lint`: Run ESLint
-- `npm run type-check`: TypeScript type checking
+- `pnpm build`: Production build
+- `pnpm start`: Start production server
+- `pnpm lint`: Run ESLint
+- `pnpm type-check`: TypeScript type checking
 
 ## Deployment
 
@@ -196,7 +196,7 @@ See [DATABASE_SCHEMA.md](./DATABASE_SCHEMA.md) for complete schema documentation
 4. Deploy
 
 ### Self-Hosted Deployment
-1. Build application: `npm run build`
+1. Build application: `pnpm build`
 2. Use process manager (PM2, systemd)
 3. Configure reverse proxy (nginx, caddy)
 4. Set up SSL certificates

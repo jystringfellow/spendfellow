@@ -5,7 +5,7 @@ This guide will walk you through setting up SpendFellow from scratch.
 ## Prerequisites
 
 Before you begin, ensure you have:
-- **Node.js 18+** and npm installed
+- **Node.js 18+** and pnpm installed
 - A **Supabase account** (free tier available at [supabase.com](https://supabase.com))
 - A **Plaid account** (free sandbox at [plaid.com](https://plaid.com))
 - **Git** installed on your system
@@ -20,7 +20,7 @@ cd spendfellow
 ## Step 2: Install Dependencies
 
 ```bash
-npm install
+pnpm install
 ```
 
 This will install all required packages including Next.js, React, MUI, Supabase client, and Plaid SDK.
@@ -116,7 +116,7 @@ NEXT_PUBLIC_APP_URL=http://localhost:3000
 ### 6.1 Type Check
 
 ```bash
-npm run type-check
+pnpm type-check
 ```
 
 You should see no errors. If you do, check that all files are present.
@@ -124,7 +124,7 @@ You should see no errors. If you do, check that all files are present.
 ### 6.2 Lint Check
 
 ```bash
-npm run lint
+pnpm lint
 ```
 
 You should see: `✔ No ESLint warnings or errors`
@@ -132,7 +132,7 @@ You should see: `✔ No ESLint warnings or errors`
 ### 6.3 Build the Application
 
 ```bash
-npm run build
+pnpm build
 ```
 
 You should see a successful build output with all pages compiled.
@@ -140,7 +140,7 @@ You should see a successful build output with all pages compiled.
 ## Step 7: Run the Development Server
 
 ```bash
-npm run dev
+pnpm dev
 ```
 
 The application should start and be available at [http://localhost:3000](http://localhost:3000)
@@ -239,10 +239,10 @@ These credentials will work with any institution in Sandbox mode.
 ### Build Errors
 
 **Problem**: TypeScript errors during build
-**Solution**: Run `npm run type-check` to see detailed errors
+**Solution**: Run `pnpm type-check` to see detailed errors
 
 **Problem**: Module not found errors
-**Solution**: Delete `node_modules` and run `npm install` again
+**Solution**: Delete `node_modules` and run `pnpm install` again
 
 ### Connection Errors
 

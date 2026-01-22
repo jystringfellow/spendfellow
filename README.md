@@ -60,7 +60,7 @@ spendfellow/
 
 ### Prerequisites
 
-- Node.js 18+ and npm
+- Node.js 18+ and pnpm
 - A Supabase account (free tier available)
 - A Plaid account for bank connections (sandbox mode is free)
 
@@ -74,7 +74,7 @@ spendfellow/
 
 2. **Install dependencies**
    ```bash
-   npm install
+   pnpm install
    ```
 
 3. **Set up Supabase**
@@ -107,7 +107,7 @@ spendfellow/
 
 6. **Run the development server**
    ```bash
-   npm run dev
+   pnpm dev
    ```
 
 7. **Open your browser**
@@ -146,20 +146,20 @@ Always use the utility functions in `src/lib/money.ts`:
 ### Building for Production
 
 ```bash
-npm run build
-npm run start
+pnpm build
+pnpm start
 ```
 
 ### Type Checking
 
 ```bash
-npm run type-check
+pnpm type-check
 ```
 
 ### Linting
 
 ```bash
-npm run lint
+pnpm lint
 ```
 
 ## Deployment
@@ -173,8 +173,8 @@ npm run lint
 
 ### Self-Hosted
 
-1. Build the application: `npm run build`
-2. Run with: `npm run start`
+1. Build the application: `pnpm build`
+2. Run with: `pnpm start`
 3. Use a process manager like PM2 or systemd
 4. Set up a reverse proxy (nginx/caddy)
 
