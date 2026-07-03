@@ -1,4 +1,4 @@
-# SpendFellow Database Schema
+# Spendfellow Database Schema
 
 ## Overview
 This schema is designed for PostgreSQL via Supabase with the following principles:

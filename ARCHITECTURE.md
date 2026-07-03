@@ -1,8 +1,8 @@
-# SpendFellow Project Architecture
+# Spendfellow Project Architecture
 
 ## Overview
 
-SpendFellow is a personal finance tracking application designed with the following principles:
+Spendfellow is a personal finance tracking application designed with the following principles:
 - **Privacy-first**: Self-hosted or local-first with full data control
 - **Low cost**: Designed to run on free tiers
 - **Simple & explicit**: Spreadsheet-style interfaces with clear data presentation

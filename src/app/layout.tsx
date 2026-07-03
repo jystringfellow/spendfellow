@@ -7,8 +7,12 @@ import theme from './theme';
 import Navigation from '@/components/layout/Navigation';
 
 export const metadata: Metadata = {
-  title: 'SpendFellow - Personal Finance Tracker',
+  title: 'Spendfellow - Personal Finance Tracker',
   description: 'A personal, spreadsheet-first finance app for tracking budgets and transactions',
+  icons: {
+    icon: '/spendfellow-logo.png',
+    apple: '/spendfellow-logo.png',
+  },
 };
 
 export default function RootLayout({

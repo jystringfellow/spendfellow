@@ -1,4 +1,4 @@
--- SpendFellow Initial Schema Migration
+-- Spendfellow Initial Schema Migration
 -- Created: 2026-01-15
 -- Description: Initial database schema for personal finance tracking app
 

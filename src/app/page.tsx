@@ -1,3 +1,4 @@
+import Image from 'next/image';
 import { Box, Container, Typography, Paper, Grid, Button } from '@mui/material';
 import Link from 'next/link';
 import {
@@ -11,11 +12,26 @@ export default function Home() {
   return (
     <Container maxWidth="lg">
       <Box sx={{ my: 4 }}>
-        <Typography variant="h2" component="h1" gutterBottom align="center">
-          SpendFellow
-        </Typography>
-        <Typography variant="h5" component="h2" gutterBottom align="center" color="text.secondary">
-          Personal Finance Tracking Made Simple
+        <Box
+          sx={{
+            mx: 'auto',
+            mb: 3,
+            position: 'relative',
+            width: 'min(720px, 100%)',
+            aspectRatio: '3 / 1',
+          }}
+        >
+          <Image
+            src="/spendfellow-lockup.png"
+            alt="Spendfellow"
+            fill
+            priority
+            sizes="(max-width: 900px) 100vw, 720px"
+            style={{ objectFit: 'contain' }}
+          />
+        </Box>
+        <Typography variant="h5" component="h1" gutterBottom align="center" color="text.secondary">
+          Spreadsheet-first finance tracking for household budgeting.
         </Typography>
 
         <Box sx={{ mt: 6, mb: 4 }}>
@@ -86,7 +102,15 @@ export default function Home() {
           </Grid>
         </Box>
 
-        <Paper sx={{ p: 3, mt: 4, bgcolor: 'primary.main', color: 'white' }}>
+        <Paper
+          sx={{
+            p: 3,
+            mt: 4,
+            bgcolor: '#050712',
+            color: 'white',
+            borderColor: 'rgba(98, 243, 63, 0.25)',
+          }}
+        >
           <Typography variant="h6" gutterBottom>
             Key Features
           </Typography>
