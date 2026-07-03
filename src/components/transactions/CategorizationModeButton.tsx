@@ -24,6 +24,7 @@ import CloseIcon from '@mui/icons-material/Close';
 import CheckIcon from '@mui/icons-material/Check';
 import DeleteIcon from '@mui/icons-material/Delete';
 import KeyboardBackspaceIcon from '@mui/icons-material/KeyboardBackspace';
+import OpenInNewIcon from '@mui/icons-material/OpenInNew';
 import SkipNextIcon from '@mui/icons-material/SkipNext';
 import PlaylistAddCheckIcon from '@mui/icons-material/PlaylistAddCheck';
 import { formatCurrency, parseCurrencyToCents } from '@/lib/money';
@@ -134,6 +135,155 @@ function cancelSplitDraft(current: Draft): Draft {
   };
 }
 
+function getAmazonItemTotalCents(priceCents: number | null, quantity: number | null): number | null {
+  if (priceCents === null) {
+    return null;
+  }
+
+  return priceCents * Math.max(1, quantity ?? 1);
+}
+
+function stripCurrencySymbol(value: string) {
+  return value.replace('$', '');
+}
+
+function hasNonZeroCents(value: number | null) {
+  return value !== null && value !== 0;
+}
+
+function getAmazonItemsTotalCents(transaction: EditableTransactionRow): number | null {
+  const itemTotals = (transaction.amazon_match?.items ?? [])
+    .map((item) => getAmazonItemTotalCents(item.priceCents, item.quantity))
+    .filter((value): value is number => value !== null);
+
+  if (itemTotals.length === 0) {
+    return null;
+  }
+
+  return itemTotals.reduce((total, value) => total + value, 0);
+}
+
+function getAmazonDisplayItemSubtotalCents(transaction: EditableTransactionRow): number | null {
+  const itemSubtotalCents = transaction.amazon_match?.order?.itemSubtotalCents ?? null;
+  if (hasNonZeroCents(itemSubtotalCents)) {
+    return itemSubtotalCents;
+  }
+
+  return getAmazonItemsTotalCents(transaction);
+}
+
+function getAmazonBeforeTaxCents(transaction: EditableTransactionRow): number | null {
+  const order = transaction.amazon_match?.order;
+  if (!order) {
+    return null;
+  }
+
+  const hasSummaryParts =
+    hasNonZeroCents(order.itemSubtotalCents) ||
+    hasNonZeroCents(order.discountsCents) ||
+    hasNonZeroCents(order.shippingCents);
+  if (!hasSummaryParts) {
+    if (order.grandTotalCents !== null && order.taxCents !== null) {
+      return order.taxCents > order.grandTotalCents / 2 ? order.taxCents : order.grandTotalCents - order.taxCents;
+    }
+
+    return null;
+  }
+
+  const subtotal = order.itemSubtotalCents ?? 0;
+  const shipping = order.shippingCents ?? 0;
+  const discounts = order.discountsCents ?? 0;
+  return subtotal + shipping + discounts;
+}
+
+function getAmazonDisplayTaxCents(transaction: EditableTransactionRow): number | null {
+  const order = transaction.amazon_match?.order;
+  if (!order) {
+    return null;
+  }
+
+  const beforeTaxCents = getAmazonBeforeTaxCents(transaction);
+  if (beforeTaxCents !== null && order.grandTotalCents !== null && order.taxCents !== null) {
+    const inferredTaxCents = order.grandTotalCents - beforeTaxCents;
+    if (order.taxCents === beforeTaxCents || order.itemSubtotalCents === null) {
+      return inferredTaxCents;
+    }
+  }
+
+  return order.taxCents;
+}
+
+function getAmazonDisplayDiscountsCents(transaction: EditableTransactionRow): number | null {
+  const order = transaction.amazon_match?.order;
+  if (!order) {
+    return null;
+  }
+
+  if (hasNonZeroCents(order.discountsCents)) {
+    return order.discountsCents;
+  }
+
+  const beforeTaxCents = getAmazonBeforeTaxCents(transaction);
+  const itemSubtotalCents = getAmazonDisplayItemSubtotalCents(transaction);
+  if (beforeTaxCents === null || itemSubtotalCents === null) {
+    return order.discountsCents;
+  }
+
+  const inferredDiscountsCents = beforeTaxCents - itemSubtotalCents - (order.shippingCents ?? 0);
+  return inferredDiscountsCents === 0 ? order.discountsCents : inferredDiscountsCents;
+}
+
+function createAmazonSplitDrafts(transaction: EditableTransactionRow): SplitDraft[] {
+  if (
+    !transaction.amazon_match ||
+    transaction.amazon_match.isRefund ||
+    transaction.amount_cents <= 0 ||
+    transaction.amazon_match.items.length < 2
+  ) {
+    return [];
+  }
+
+  const itemSplits = transaction.amazon_match.items.flatMap((item) => {
+    const totalCents = getAmazonItemTotalCents(item.priceCents, item.quantity);
+    if (totalCents === null || totalCents <= 0) {
+      return [];
+    }
+
+    return [
+      {
+        amount: stripCurrencySymbol(formatCurrency(totalCents)),
+        categoryId: '',
+        notes: item.title,
+        tagIds: [],
+        tagNames: [],
+      },
+    ];
+  });
+
+  if (itemSplits.length === 0) {
+    return [];
+  }
+
+  const itemTotalCents = itemSplits.reduce((total, split) => total + parseCurrencyToCents(split.amount), 0);
+  const remainderCents = transaction.amount_cents - itemTotalCents;
+  if (remainderCents !== 0) {
+    itemSplits.push({
+      amount: stripCurrencySymbol(formatCurrency(remainderCents)),
+      categoryId: '',
+      notes: 'Amazon tax, shipping, discounts, and adjustments',
+      tagIds: [],
+      tagNames: [],
+    });
+  }
+
+  return itemSplits;
+}
+
+function getSingleAmazonItem(transaction: EditableTransactionRow) {
+  const items = transaction.amazon_match?.items ?? [];
+  return items.length === 1 ? items[0] : null;
+}
+
 export default function CategorizationModeButton({ transactions, categories, tags }: CategorizationModeButtonProps) {
   const router = useRouter();
   const [tagOptions, setTagOptions] = useState(tags);
@@ -151,6 +301,12 @@ export default function CategorizationModeButton({ transactions, categories, tag
     [completedIds, transactions]
   );
   const currentTransaction = queue[currentIndex] ?? queue[0];
+  const amazonSplitDrafts = currentTransaction ? createAmazonSplitDrafts(currentTransaction) : [];
+  const singleAmazonItem = currentTransaction ? getSingleAmazonItem(currentTransaction) : null;
+  const amazonDisplayItemSubtotalCents = currentTransaction ? getAmazonDisplayItemSubtotalCents(currentTransaction) : null;
+  const amazonDisplayDiscountsCents = currentTransaction ? getAmazonDisplayDiscountsCents(currentTransaction) : null;
+  const amazonBeforeTaxCents = currentTransaction ? getAmazonBeforeTaxCents(currentTransaction) : null;
+  const amazonDisplayTaxCents = currentTransaction ? getAmazonDisplayTaxCents(currentTransaction) : null;
   const progressCount = completedIds.size;
   const totalCount = transactions.length;
 
@@ -363,6 +519,174 @@ export default function CategorizationModeButton({ transactions, categories, tag
                   <Chip size="small" label={currentTransaction.pending ? 'Pending' : 'Posted'} />
                 </Stack>
               </Box>
+
+              {currentTransaction.amazon_match ? (
+                <Box
+                  sx={{
+                    border: 1,
+                    borderColor: 'divider',
+                    borderRadius: 1,
+                    p: 1.5,
+                    bgcolor: 'rgba(109, 255, 46, 0.05)',
+                  }}
+                >
+                  <Stack spacing={1.25}>
+                    <Stack direction={{ xs: 'column', sm: 'row' }} justifyContent="space-between" spacing={1}>
+                      <Box>
+                        <Typography variant="subtitle2">Amazon order match</Typography>
+                        <Typography variant="body2" color="text.secondary">
+                          Order #{currentTransaction.amazon_match.orderId}
+                          {currentTransaction.amazon_match.transactionDate
+                            ? ` - ${currentTransaction.amazon_match.transactionDate}`
+                            : ''}
+                        </Typography>
+                      </Box>
+                      <Stack direction="row" spacing={1} alignItems="center">
+                        <Chip
+                          size="small"
+                          color={currentTransaction.amazon_match.isRefund ? 'success' : 'default'}
+                          label={formatCurrency(currentTransaction.amazon_match.amountCents)}
+                        />
+                        {currentTransaction.amazon_match.order?.orderDetailUrl ? (
+                          <Button
+                            component="a"
+                            href={currentTransaction.amazon_match.order.orderDetailUrl}
+                            target="_blank"
+                            rel="noreferrer"
+                            size="small"
+                            endIcon={<OpenInNewIcon fontSize="small" />}
+                          >
+                            Order
+                          </Button>
+                        ) : null}
+                      </Stack>
+                    </Stack>
+
+                    {currentTransaction.amazon_match.order ? (
+                      <Stack direction="row" spacing={1} flexWrap="wrap">
+                        {amazonDisplayItemSubtotalCents !== null ? (
+                          <Chip
+                            size="small"
+                            variant="outlined"
+                            label={`Items ${formatCurrency(amazonDisplayItemSubtotalCents)}`}
+                          />
+                        ) : null}
+                        {currentTransaction.amazon_match.order.shippingCents !== null ? (
+                          <Chip
+                            size="small"
+                            variant="outlined"
+                            label={`Shipping ${formatCurrency(currentTransaction.amazon_match.order.shippingCents)}`}
+                          />
+                        ) : null}
+                        {amazonDisplayDiscountsCents !== null ? (
+                          <Chip
+                            size="small"
+                            variant="outlined"
+                            label={`Discounts ${formatCurrency(amazonDisplayDiscountsCents)}`}
+                          />
+                        ) : null}
+                        {amazonBeforeTaxCents !== null ? (
+                          <Chip
+                            size="small"
+                            variant="outlined"
+                            label={`Before tax ${formatCurrency(amazonBeforeTaxCents)}`}
+                          />
+                        ) : null}
+                        {amazonDisplayTaxCents !== null ? (
+                          <Chip
+                            size="small"
+                            variant="outlined"
+                            label={`Estimated tax ${formatCurrency(amazonDisplayTaxCents)}`}
+                          />
+                        ) : null}
+                        {currentTransaction.amazon_match.order.grandTotalCents !== null ? (
+                          <Chip
+                            size="small"
+                            variant="outlined"
+                            label={`Order total ${formatCurrency(currentTransaction.amazon_match.order.grandTotalCents)}`}
+                          />
+                        ) : null}
+                      </Stack>
+                    ) : null}
+
+                    {currentTransaction.amazon_match.items.length > 0 ? (
+                      <Stack spacing={0.75}>
+                        {currentTransaction.amazon_match.items.map((item) => {
+                          const itemTotalCents = getAmazonItemTotalCents(item.priceCents, item.quantity);
+                          return (
+                            <Box
+                              key={item.id}
+                              sx={{
+                                display: 'grid',
+                                gridTemplateColumns: { xs: '1fr', sm: 'minmax(0, 1fr) auto' },
+                                gap: 1,
+                                alignItems: 'start',
+                              }}
+                            >
+                              <Box sx={{ minWidth: 0 }}>
+                                <Typography variant="body2" sx={{ fontWeight: 600 }}>
+                                  {item.title}
+                                </Typography>
+                                <Typography variant="caption" color="text.secondary">
+                                  {item.asin ?? 'No ASIN'}
+                                  {item.quantity && item.quantity > 1 ? ` - Qty ${item.quantity}` : ''}
+                                </Typography>
+                              </Box>
+                              <Typography variant="body2" sx={{ whiteSpace: 'nowrap', textAlign: { sm: 'right' } }}>
+                                {itemTotalCents === null
+                                  ? '-'
+                                  : item.quantity && item.quantity > 1
+                                    ? `${formatCurrency(item.priceCents ?? 0)} x ${item.quantity} = ${formatCurrency(
+                                        itemTotalCents
+                                      )}`
+                                    : formatCurrency(itemTotalCents)}
+                              </Typography>
+                            </Box>
+                          );
+                        })}
+                      </Stack>
+                    ) : (
+                      <Typography variant="body2" color="text.secondary">
+                        No Amazon item rows imported for this order yet.
+                      </Typography>
+                    )}
+
+                    {amazonSplitDrafts.length > 0 ? (
+                      <Box>
+                        <Button
+                          size="small"
+                          variant="outlined"
+                          startIcon={<PlaylistAddCheckIcon />}
+                          onClick={() =>
+                            setDraft((current) => ({
+                              ...current,
+                              isSplit: true,
+                              splits: amazonSplitDrafts,
+                            }))
+                          }
+                        >
+                          Use items as splits
+                        </Button>
+                      </Box>
+                    ) : singleAmazonItem ? (
+                      <Box>
+                        <Button
+                          size="small"
+                          variant="outlined"
+                          onClick={() =>
+                            setDraft((current) => ({
+                              ...current,
+                              notes: singleAmazonItem.title,
+                            }))
+                          }
+                        >
+                          Use item as note
+                        </Button>
+                      </Box>
+                    ) : null}
+                  </Stack>
+                </Box>
+              ) : null}
 
               <Divider />
 

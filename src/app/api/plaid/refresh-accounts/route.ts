@@ -14,7 +14,7 @@ interface RefreshPayload {
 interface RefreshAccountRow
   extends Pick<
     Account,
-    'id' | 'plaid_account_id' | 'plaid_item_id' | 'plaid_environment' | 'last_balance_sync_at' | 'is_active'
+    'id' | 'name' | 'plaid_account_id' | 'plaid_item_id' | 'plaid_environment' | 'last_balance_sync_at' | 'is_active'
   > {}
 
 interface RefreshItemDetail {
@@ -23,6 +23,14 @@ interface RefreshItemDetail {
   environment: PlaidItem['plaid_environment'];
   accounts_count: number;
   skipped_count: number;
+}
+
+function isMissingLastBalanceSyncColumn(error: { message?: string; code?: string } | null) {
+  return Boolean(
+    error &&
+      (error.code === 'PGRST204' || /schema cache|last_balance_sync_at/i.test(error.message ?? '')) &&
+      /last_balance_sync_at/i.test(error.message ?? '')
+  );
 }
 
 function getStartOfToday(): Date {
@@ -61,25 +69,47 @@ export async function POST(request: NextRequest) {
   }
 
   const serviceSupabase = createServiceSupabaseClient();
-  let accountsQuery = serviceSupabase
-    .from('accounts')
-    .select('id, plaid_account_id, plaid_item_id, plaid_environment, last_balance_sync_at, is_active')
-    .eq('household_id', household.id)
-    .eq('is_active', true)
-    .not('plaid_account_id', 'is', null)
-    .not('plaid_item_id', 'is', null);
+  const buildAccountsQuery = (selectColumns: string) => {
+    let query = serviceSupabase
+      .from('accounts')
+      .select(selectColumns)
+      .eq('household_id', household.id)
+      .eq('is_active', true)
+      .not('plaid_account_id', 'is', null)
+      .not('plaid_item_id', 'is', null);
 
-  if (requestedAccountIds.length > 0) {
-    accountsQuery = accountsQuery.in('id', requestedAccountIds);
+    if (requestedAccountIds.length > 0) {
+      query = query.in('id', requestedAccountIds);
+    }
+
+    return query;
+  };
+
+  const accountsQuery = buildAccountsQuery(
+    'id, name, plaid_account_id, plaid_item_id, plaid_environment, last_balance_sync_at, is_active'
+  );
+  const accountsResult = await accountsQuery;
+  let accountRows = (accountsResult.data ?? null) as RefreshAccountRow[] | null;
+  let accountsSelectError = accountsResult.error;
+  let supportsBalanceSyncTracking = true;
+
+  if (isMissingLastBalanceSyncColumn(accountsSelectError)) {
+    supportsBalanceSyncTracking = false;
+    const fallbackAccountsQuery = buildAccountsQuery('id, name, plaid_account_id, plaid_item_id, plaid_environment, is_active');
+    const fallbackResult = await fallbackAccountsQuery;
+    accountRows =
+      ((fallbackResult.data ?? []) as unknown as Omit<RefreshAccountRow, 'last_balance_sync_at'>[]).map((account) => ({
+        ...account,
+        last_balance_sync_at: null,
+      })) ?? null;
+    accountsSelectError = fallbackResult.error;
   }
-
-  const { data: accountRows, error: accountsSelectError } = await accountsQuery;
 
   if (accountsSelectError) {
     return NextResponse.json({ error: accountsSelectError.message }, { status: 500 });
   }
 
-  const refreshAccounts = (accountRows ?? []) as RefreshAccountRow[];
+  const refreshAccounts = accountRows ?? [];
   if (refreshAccounts.length === 0) {
     return NextResponse.json({ accounts_count: 0, skipped_count: 0, items: [] });
   }
@@ -164,9 +194,16 @@ export async function POST(request: NextRequest) {
       const plaidEnvironment = resolvePlaidEnvironment(item.plaid_environment, item.plaid_access_token);
       const runStartedAt = new Date().toISOString();
       const plaidAccounts = await fetchAccounts(item.plaid_access_token, plaidEnvironment);
+      const accountNameOverridesByPlaidAccountId = new Map(
+        accountsForItem
+          .filter((account): account is RefreshAccountRow & { plaid_account_id: string } => Boolean(account.plaid_account_id))
+          .map((account) => [account.plaid_account_id, account.name])
+      );
       const accountRowsToUpsert = toAccountUpsertRows({
+        accountNameOverridesByPlaidAccountId,
         accounts: plaidAccounts,
         householdId: household.id,
+        includeBalanceSyncAt: supportsBalanceSyncTracking,
         itemId: item.plaid_item_id,
         plaidEnvironment,
         syncedAt: now,
@@ -174,9 +211,26 @@ export async function POST(request: NextRequest) {
       });
 
       if (accountRowsToUpsert.length > 0) {
-        const { error: accountsError } = await serviceSupabase.from('accounts').upsert(accountRowsToUpsert, {
+        let { error: accountsError } = await serviceSupabase.from('accounts').upsert(accountRowsToUpsert, {
           onConflict: 'plaid_environment,plaid_account_id',
         });
+
+        if (isMissingLastBalanceSyncColumn(accountsError)) {
+          supportsBalanceSyncTracking = false;
+          const retryRows = toAccountUpsertRows({
+            accountNameOverridesByPlaidAccountId,
+            accounts: plaidAccounts,
+            householdId: household.id,
+            includeBalanceSyncAt: false,
+            itemId: item.plaid_item_id,
+            plaidEnvironment,
+            userId: user.id,
+          });
+          const retryResult = await serviceSupabase.from('accounts').upsert(retryRows, {
+            onConflict: 'plaid_environment,plaid_account_id',
+          });
+          accountsError = retryResult.error;
+        }
 
         if (accountsError) {
           return NextResponse.json({ error: accountsError.message }, { status: 500 });

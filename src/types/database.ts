@@ -80,6 +80,67 @@ export interface PlaidSyncRun {
   created_at: string;
 }
 
+export interface AmazonSyncSession {
+  id: string;
+  household_id: string;
+  user_id: string;
+  token_hash: string;
+  app_origin: string;
+  cutoff_date: string | null;
+  expires_at: string;
+  last_seen_at: string | null;
+  created_at: string;
+}
+
+export interface AmazonOrder {
+  id: string;
+  household_id: string;
+  user_id: string;
+  sync_session_id: string | null;
+  order_id: string;
+  order_detail_url: string | null;
+  item_subtotal_cents: number | null;
+  shipping_cents: number | null;
+  discounts_cents: number | null;
+  tax_cents: number | null;
+  grand_total_cents: number | null;
+  raw_summary_text: string | null;
+  details_imported_at: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface AmazonPaymentTransaction {
+  id: string;
+  household_id: string;
+  user_id: string;
+  sync_session_id: string | null;
+  order_id: string;
+  transaction_date: string | null;
+  amount_cents: number;
+  payment_method_hint: string | null;
+  merchant_text: string | null;
+  order_detail_url: string | null;
+  raw_text: string | null;
+  is_refund: boolean;
+  plaid_transaction_id: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface AmazonOrderItem {
+  id: string;
+  household_id: string;
+  user_id: string;
+  order_id: string;
+  title: string;
+  price_cents: number | null;
+  asin: string | null;
+  quantity: number | null;
+  sort_order: number;
+  created_at: string;
+}
+
 export interface Category {
   id: string;
   user_id: string;

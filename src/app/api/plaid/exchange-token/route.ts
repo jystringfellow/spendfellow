@@ -14,6 +14,14 @@ interface ExchangePayload {
   } | null;
 }
 
+function isMissingLastBalanceSyncColumn(error: { message?: string; code?: string } | null) {
+  return Boolean(
+    error &&
+      (error.code === 'PGRST204' || /schema cache|last_balance_sync_at/i.test(error.message ?? '')) &&
+      /last_balance_sync_at/i.test(error.message ?? '')
+  );
+}
+
 export async function POST(request: NextRequest) {
   const payload = (await request.json()) as ExchangePayload;
 
@@ -69,7 +77,7 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: itemError.message }, { status: 500 });
     }
 
-    const accountRows = toAccountUpsertRows({
+    let accountRows = toAccountUpsertRows({
       accounts: plaidAccounts,
       householdId: household.id,
       itemId,
@@ -78,9 +86,24 @@ export async function POST(request: NextRequest) {
       userId: user.id,
     });
 
-    const { error: accountsError } = await serviceSupabase.from('accounts').upsert(accountRows, {
+    let { error: accountsError } = await serviceSupabase.from('accounts').upsert(accountRows, {
       onConflict: 'plaid_environment,plaid_account_id',
     });
+
+    if (isMissingLastBalanceSyncColumn(accountsError)) {
+      accountRows = toAccountUpsertRows({
+        accounts: plaidAccounts,
+        householdId: household.id,
+        includeBalanceSyncAt: false,
+        itemId,
+        plaidEnvironment,
+        userId: user.id,
+      });
+      const retryResult = await serviceSupabase.from('accounts').upsert(accountRows, {
+        onConflict: 'plaid_environment,plaid_account_id',
+      });
+      accountsError = retryResult.error;
+    }
 
     if (accountsError) {
       return NextResponse.json({ error: accountsError.message }, { status: 500 });

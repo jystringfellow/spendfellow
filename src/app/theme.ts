@@ -61,6 +61,9 @@ const theme = createTheme({
             'radial-gradient(circle at top left, rgba(109, 255, 46, 0.08), transparent 34rem), radial-gradient(circle at top right, rgba(176, 92, 255, 0.1), transparent 32rem), #090A14',
           color: '#F7F8FC',
         },
+        'input[type="date"]': {
+          colorScheme: 'light',
+        },
       },
     },
     MuiButton: {

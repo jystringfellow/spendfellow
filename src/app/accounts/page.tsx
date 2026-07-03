@@ -10,15 +10,16 @@ import {
   Table,
   TableBody,
   TableCell,
+  TableContainer,
   TableHead,
   TableRow,
   Typography,
 } from '@mui/material';
 import Link from 'next/link';
+import AccountNameEditor from '@/components/accounts/AccountNameEditor';
 import PlaidItemActions from '@/components/accounts/PlaidItemActions';
 import PlaidLinkButton from '@/components/accounts/PlaidLinkButton';
 import RefreshAccountsButton from '@/components/accounts/RefreshAccountsButton';
-import SyncTransactionsButton from '@/components/transactions/SyncTransactionsButton';
 import { getAccountTransactionRole } from '@/lib/accountTypes';
 import { getCurrentHousehold } from '@/lib/households';
 import { formatCurrency } from '@/lib/money';
@@ -80,6 +81,10 @@ function formatSyncRun(run: PlaidSyncRun | undefined): string {
         ? 'skipped'
         : `${run.imported_count} accounts`;
   return `${run.status} - ${countText} - ${new Date(finishedAt).toLocaleString()}`;
+}
+
+function formatSyncedAt(value: string | null | undefined): string {
+  return value ? new Date(value).toLocaleString() : 'Never';
 }
 
 export default async function AccountsPage() {
@@ -149,6 +154,7 @@ export default async function AccountsPage() {
           </Box>
           {household ? (
             <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1.5} alignItems={{ xs: 'stretch', sm: 'flex-start' }}>
+              <RefreshAccountsButton />
               <PlaidLinkButton defaultEnvironment={defaultPlaidEnvironment} />
             </Stack>
           ) : null}
@@ -174,53 +180,55 @@ export default async function AccountsPage() {
                 Linked institutions
               </Typography>
               {items.length > 0 ? (
-                <Table size="small">
-                  <TableHead>
-                    <TableRow>
-                      <TableCell>Institution</TableCell>
-                      <TableCell>Environment</TableCell>
-                      <TableCell>Status</TableCell>
-                      <TableCell>Last transaction sync</TableCell>
-                      <TableCell>Last balance sync</TableCell>
-                      <TableCell align="right">Actions</TableCell>
-                    </TableRow>
-                  </TableHead>
-                  <TableBody>
-                    {items.map((item) => {
-                      const institutionName = item.institution_name ?? item.institution_id ?? item.plaid_item_id;
+                <TableContainer>
+                  <Table size="small">
+                    <TableHead>
+                      <TableRow>
+                        <TableCell>Institution</TableCell>
+                        <TableCell>Environment</TableCell>
+                        <TableCell>Status</TableCell>
+                        <TableCell>Last transaction sync</TableCell>
+                        <TableCell>Last balance refresh</TableCell>
+                        <TableCell align="right">Actions</TableCell>
+                      </TableRow>
+                    </TableHead>
+                    <TableBody>
+                      {items.map((item) => {
+                        const institutionName = item.institution_name ?? item.institution_id ?? item.plaid_item_id;
 
-                      return (
-                        <TableRow key={item.id}>
-                          <TableCell>{institutionName}</TableCell>
-                          <TableCell>
-                            {item.plaid_environment ? (
-                              <Chip size="small" variant="outlined" label={item.plaid_environment} />
-                            ) : (
-                              '-'
-                            )}
-                          </TableCell>
-                          <TableCell>
-                            <Chip
-                              size="small"
-                              label={item.status}
-                              color={item.status === 'active' ? 'success' : 'default'}
-                              variant="outlined"
-                            />
-                          </TableCell>
-                          <TableCell>{formatSyncRun(latestTransactionRunByPlaidItemId.get(item.plaid_item_id))}</TableCell>
-                          <TableCell>{formatSyncRun(latestBalanceRunByPlaidItemId.get(item.plaid_item_id))}</TableCell>
-                          <TableCell align="right">
-                            {item.status === 'active' ? (
-                              <PlaidItemActions itemId={item.id} institutionName={institutionName} />
-                            ) : (
-                              '-'
-                            )}
-                          </TableCell>
-                        </TableRow>
-                      );
-                    })}
-                  </TableBody>
-                </Table>
+                        return (
+                          <TableRow key={item.id}>
+                            <TableCell>{institutionName}</TableCell>
+                            <TableCell>
+                              {item.plaid_environment ? (
+                                <Chip size="small" variant="outlined" label={item.plaid_environment} />
+                              ) : (
+                                '-'
+                              )}
+                            </TableCell>
+                            <TableCell>
+                              <Chip
+                                size="small"
+                                label={item.status}
+                                color={item.status === 'active' ? 'success' : 'default'}
+                                variant="outlined"
+                              />
+                            </TableCell>
+                            <TableCell>{formatSyncRun(latestTransactionRunByPlaidItemId.get(item.plaid_item_id))}</TableCell>
+                            <TableCell>{formatSyncRun(latestBalanceRunByPlaidItemId.get(item.plaid_item_id))}</TableCell>
+                            <TableCell align="right">
+                              {item.status === 'active' ? (
+                                <PlaidItemActions itemId={item.id} institutionName={institutionName} />
+                              ) : (
+                                '-'
+                              )}
+                            </TableCell>
+                          </TableRow>
+                        );
+                      })}
+                    </TableBody>
+                  </Table>
+                </TableContainer>
               ) : (
                 <Typography color="text.secondary">No institutions connected yet.</Typography>
               )}
@@ -237,7 +245,8 @@ export default async function AccountsPage() {
               </Box>
               <Divider />
               {accounts.length > 0 ? (
-                <Table>
+                <TableContainer>
+                <Table sx={{ minWidth: 1120 }}>
                   <TableHead>
                     <TableRow>
                       <TableCell>Name</TableCell>
@@ -245,99 +254,77 @@ export default async function AccountsPage() {
                       <TableCell align="right">Current</TableCell>
                       <TableCell align="right">Available</TableCell>
                       <TableCell>Status</TableCell>
-                      <TableCell>Transaction sync</TableCell>
+                      <TableCell>Role</TableCell>
                       <TableCell>Environment</TableCell>
-                      <TableCell>Balance sync</TableCell>
+                      <TableCell>Last balance refresh</TableCell>
                       <TableCell>Last transaction sync</TableCell>
-                      <TableCell align="right">Actions</TableCell>
                     </TableRow>
                   </TableHead>
                   <TableBody>
-                    {accounts.map((account) => (
-                      <TableRow key={account.id}>
-                        <TableCell>
-                          <Stack spacing={0.25}>
-                            <Typography fontWeight={600}>{account.name}</Typography>
-                            {account.official_name ? (
+                    {accounts.map((account) => {
+                      const isSpendingAccount = getAccountTransactionRole(account) === 'spending';
+                      const latestBalanceRun =
+                        latestBalanceRunByAccountId.get(account.id) ??
+                        latestBalanceRunByPlaidItemId.get(account.plaid_item_id ?? '');
+                      const lastBalanceSync = account.last_balance_sync_at
+                        ? formatSyncedAt(account.last_balance_sync_at)
+                        : formatSyncRun(latestBalanceRun);
+
+                      return (
+                        <TableRow key={account.id}>
+                          <TableCell>
+                            <AccountNameEditor accountId={account.id} name={account.name} officialName={account.official_name} />
+                          </TableCell>
+                          <TableCell>
+                            <Typography>{account.type}</Typography>
+                            {account.subtype ? (
                               <Typography variant="body2" color="text.secondary">
-                                {account.official_name}
+                                {account.subtype}
                               </Typography>
                             ) : null}
-                          </Stack>
-                        </TableCell>
-                        <TableCell>
-                          <Typography>{account.type}</Typography>
-                          {account.subtype ? (
-                            <Typography variant="body2" color="text.secondary">
-                              {account.subtype}
-                            </Typography>
-                          ) : null}
-                        </TableCell>
-                        <TableCell align="right">
-                          {account.current_balance_cents === null
-                            ? '-'
-                            : formatCurrency(account.current_balance_cents, account.currency_code)}
-                        </TableCell>
-                        <TableCell align="right">
-                          {account.available_balance_cents === null
-                            ? '-'
-                            : formatCurrency(account.available_balance_cents, account.currency_code)}
-                        </TableCell>
-                        <TableCell>
-                          <Chip size="small" label={account.is_active ? 'Active' : 'Inactive'} />
-                        </TableCell>
-                        <TableCell>
-                          {getAccountTransactionRole(account) === 'spending' ? (
-                            <Chip size="small" color="success" variant="outlined" label="Spending" />
-                          ) : (
-                            <Chip size="small" variant="outlined" label="Balance only" />
-                          )}
-                        </TableCell>
-                        <TableCell>
-                          {account.plaid_environment ? (
-                            <Chip size="small" variant="outlined" label={account.plaid_environment} />
-                          ) : (
-                            '-'
-                          )}
-                        </TableCell>
-                        <TableCell>
-                          {formatSyncRun(latestBalanceRunByAccountId.get(account.id))}
-                        </TableCell>
-                        <TableCell>
-                          {getAccountTransactionRole(account) === 'spending'
-                            ? formatSyncRun(
-                                latestTransactionRunByAccountId.get(account.id) ??
-                                  latestTransactionRunByPlaidItemId.get(account.plaid_item_id ?? '')
-                              )
-                            : '-'}
-                        </TableCell>
-                        <TableCell align="right">
-                          {account.is_active && account.plaid_account_id ? (
-                            <Stack direction="row" spacing={1} justifyContent="flex-end">
-                              {getAccountTransactionRole(account) === 'spending' ? (
-                                <SyncTransactionsButton
-                                  accountIds={[account.id]}
-                                  label="Sync"
-                                  size="small"
-                                  variant="text"
-                                />
-                              ) : null}
-                              <RefreshAccountsButton
-                                accountIds={[account.id]}
-                                label="Balance"
-                                refreshedLabel="Done"
-                                size="small"
-                                variant="text"
-                              />
-                            </Stack>
-                          ) : (
-                            '-'
-                          )}
-                        </TableCell>
-                      </TableRow>
-                    ))}
+                          </TableCell>
+                          <TableCell align="right">
+                            {account.current_balance_cents === null
+                              ? '-'
+                              : formatCurrency(account.current_balance_cents, account.currency_code)}
+                          </TableCell>
+                          <TableCell align="right">
+                            {account.available_balance_cents === null
+                              ? '-'
+                              : formatCurrency(account.available_balance_cents, account.currency_code)}
+                          </TableCell>
+                          <TableCell>
+                            <Chip size="small" label={account.is_active ? 'Active' : 'Inactive'} />
+                          </TableCell>
+                          <TableCell>
+                            {isSpendingAccount ? (
+                              <Chip size="small" color="success" variant="outlined" label="Spending" />
+                            ) : (
+                              <Chip size="small" variant="outlined" label="Balance only" />
+                            )}
+                          </TableCell>
+                          <TableCell>
+                            {account.plaid_environment ? (
+                              <Chip size="small" variant="outlined" label={account.plaid_environment} />
+                            ) : (
+                              '-'
+                            )}
+                          </TableCell>
+                          <TableCell>{lastBalanceSync}</TableCell>
+                          <TableCell>
+                            {isSpendingAccount
+                              ? formatSyncRun(
+                                  latestTransactionRunByAccountId.get(account.id) ??
+                                    latestTransactionRunByPlaidItemId.get(account.plaid_item_id ?? '')
+                                )
+                              : '-'}
+                          </TableCell>
+                        </TableRow>
+                      );
+                    })}
                   </TableBody>
                 </Table>
+                </TableContainer>
               ) : (
                 <Box sx={{ p: 3 }}>
                   <Typography color="text.secondary">

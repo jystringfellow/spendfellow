@@ -100,6 +100,27 @@ PLAID_REDIRECT_URI=https://your-app-domain.example/accounts
 NEXT_PUBLIC_APP_URL=https://your-app-domain.example
 ```
 
+## Template Setup Checklist
+
+When using Spendfellow as a starting point for your own financial tracker, keep these choices private to your deployment:
+
+1. Create your own Supabase project and run every migration in `supabase/migrations/`.
+2. Create your own Plaid app and set Plaid secrets only in `.env.local` or Vercel environment variables.
+3. Use your own Vercel project and production domain.
+4. Set `NEXT_PUBLIC_APP_URL` and `PLAID_REDIRECT_URI` to the exact deployed HTTPS origin.
+5. Configure Supabase Auth for your household. Disable open signups or restrict signups before sharing the URL.
+6. Invite household users through Supabase Auth.
+7. Keep screenshots, statement exports, spreadsheet exports, Amazon order captures, and other real financial evidence out of Git.
+8. Keep household-specific category names and seed data out of reusable migrations unless they are neutral demo data.
+
+The public repository should contain reusable application code, schema, neutral sample data, and documentation. The private deployment repository can carry deployment-specific history, but it still should not contain secrets or financial exports.
+
+## Private Local Files
+
+Local research artifacts are ignored by default under folders such as `assets/from-google/`, `assets/example-screenshots/`, `assets/amazon-snaps/`, and `assets/ux-cleanup/`. Common photo/video files under `assets/` are also ignored so accidental screenshots and phone exports do not show up as untracked files.
+
+Ignoring a file is enough if it has never been committed. If a private file was committed, remove it from Git tracking with `git rm --cached` and rewrite any unpushed commit before publishing. If it was already pushed to a public repository, treat it as exposed and rotate any affected credentials.
+
 ## Supabase Setup
 
 Each deployment should use its own Supabase project.

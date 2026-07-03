@@ -29,8 +29,36 @@ export interface EditableTransactionRow extends Transaction {
   accounts: {
     name: string;
   } | null;
+  amazon_match?: AmazonTransactionMatch | null;
   transaction_tag_ids: string[];
   transaction_split_count: number;
+}
+
+export interface AmazonTransactionMatch {
+  paymentTransactionId: string;
+  orderId: string;
+  transactionDate: string | null;
+  amountCents: number;
+  merchantText: string | null;
+  isRefund: boolean;
+  order: {
+    orderDetailUrl: string | null;
+    itemSubtotalCents: number | null;
+    shippingCents: number | null;
+    discountsCents: number | null;
+    taxCents: number | null;
+    grandTotalCents: number | null;
+  } | null;
+  items: AmazonOrderItemMatch[];
+}
+
+export interface AmazonOrderItemMatch {
+  id: string;
+  title: string;
+  priceCents: number | null;
+  asin: string | null;
+  quantity: number | null;
+  sortOrder: number;
 }
 
 interface TransactionsTableProps {
@@ -158,19 +186,18 @@ export default function TransactionsTable({ transactions, categories, tags }: Tr
 
   return (
     <TableContainer sx={{ maxWidth: '100%', overflowX: 'auto' }}>
-      <Table stickyHeader sx={{ minWidth: 1500, tableLayout: 'fixed' }}>
+      <Table stickyHeader sx={{ minWidth: 1260, tableLayout: 'fixed' }}>
       <TableHead>
         <TableRow>
           <TableCell sx={{ width: 112 }}>Date</TableCell>
           <TableCell sx={{ width: 280 }}>Description</TableCell>
           <TableCell sx={{ width: 160 }}>Account</TableCell>
-          <TableCell sx={{ width: 210 }}>Category</TableCell>
-          <TableCell sx={{ width: 280 }}>Tags</TableCell>
           <TableCell align="right" sx={{ width: 120 }}>
             Amount
           </TableCell>
+          <TableCell sx={{ width: 210 }}>Category</TableCell>
+          <TableCell sx={{ width: 280 }}>Tags</TableCell>
           <TableCell sx={{ width: 105 }}>Status</TableCell>
-          <TableCell sx={{ width: 125 }}>Environment</TableCell>
           <TableCell sx={{ width: 260 }}>Notes</TableCell>
           <TableCell
             align="right"
@@ -216,6 +243,7 @@ export default function TransactionsTable({ transactions, categories, tags }: Tr
                 </Stack>
               </TableCell>
               <TableCell>{transaction.accounts?.name ?? '-'}</TableCell>
+              <TableCell align="right">{formatCurrency(transaction.amount_cents)}</TableCell>
               <TableCell>
                 <Select
                   size="small"
@@ -245,18 +273,10 @@ export default function TransactionsTable({ transactions, categories, tags }: Tr
                   }}
                 />
               </TableCell>
-              <TableCell align="right">{formatCurrency(transaction.amount_cents)}</TableCell>
               <TableCell>
                 <Stack direction="row" spacing={0.75} flexWrap="wrap">
                   <Chip size="small" label={transaction.pending ? 'Pending' : 'Posted'} />
                 </Stack>
-              </TableCell>
-              <TableCell>
-                {transaction.plaid_environment ? (
-                  <Chip size="small" variant="outlined" label={transaction.plaid_environment} />
-                ) : (
-                  '-'
-                )}
               </TableCell>
               <TableCell>
                 <TextField

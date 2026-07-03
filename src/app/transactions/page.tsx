@@ -1,20 +1,138 @@
 import { redirect } from 'next/navigation';
 import {
   Box,
+  Button,
   Container,
   Divider,
+  MenuItem,
   Paper,
   Stack,
+  TextField,
   Typography,
 } from '@mui/material';
+import Link from 'next/link';
 import SyncTransactionsButton from '@/components/transactions/SyncTransactionsButton';
 import CategorizationModeButton from '@/components/transactions/CategorizationModeButton';
-import TransactionsTable, { EditableTransactionRow } from '@/components/transactions/TransactionsTable';
+import TransactionsTable, { AmazonTransactionMatch, EditableTransactionRow } from '@/components/transactions/TransactionsTable';
 import { getCurrentHousehold } from '@/lib/households';
 import { createServerSupabaseClient } from '@/lib/supabaseServer';
-import type { Category, Tag, TransactionTag } from '@/types/database';
+import type { AmazonOrder, AmazonOrderItem, AmazonPaymentTransaction, Category, Tag, TransactionTag } from '@/types/database';
 
-export default async function TransactionsPage() {
+const PAGE_SIZE = 50;
+const SORT_COLUMNS = ['date', 'amount_cents', 'merchant_name', 'description'] as const;
+
+interface TransactionsPageProps {
+  searchParams?: {
+    accountId?: string;
+    categoryId?: string;
+    dir?: string;
+    from?: string;
+    page?: string;
+    q?: string;
+    sort?: string;
+    to?: string;
+  };
+}
+
+function getSelectedPage(pageParam: string | undefined) {
+  const parsedPage = Number(pageParam);
+  return Number.isInteger(parsedPage) && parsedPage > 0 ? parsedPage : 1;
+}
+
+function getSortColumn(sortParam: string | undefined): (typeof SORT_COLUMNS)[number] {
+  return SORT_COLUMNS.includes(sortParam as (typeof SORT_COLUMNS)[number])
+    ? (sortParam as (typeof SORT_COLUMNS)[number])
+    : 'date';
+}
+
+function getSortDirection(dirParam: string | undefined): 'asc' | 'desc' {
+  return dirParam === 'asc' ? 'asc' : 'desc';
+}
+
+function isIsoDate(value: string | undefined): value is string {
+  return Boolean(value && /^\d{4}-\d{2}-\d{2}$/.test(value));
+}
+
+function getSearchText(value: string | undefined) {
+  return value?.replace(/[%,]/g, ' ').trim() ?? '';
+}
+
+function buildTransactionsHref(
+  currentParams: TransactionsPageProps['searchParams'],
+  updates: Record<string, string | number | null>
+) {
+  const params = new URLSearchParams();
+  Object.entries(currentParams ?? {}).forEach(([key, value]) => {
+    if (value) {
+      params.set(key, value);
+    }
+  });
+  Object.entries(updates).forEach(([key, value]) => {
+    if (value === null || value === '') {
+      params.delete(key);
+    } else {
+      params.set(key, String(value));
+    }
+  });
+  const queryString = params.toString();
+  return queryString ? `/transactions?${queryString}` : '/transactions';
+}
+
+function addDays(date: string, days: number) {
+  const parsedDate = new Date(`${date}T00:00:00`);
+  parsedDate.setDate(parsedDate.getDate() + days);
+  return parsedDate.toISOString().slice(0, 10);
+}
+
+function getDateDistanceDays(left: string | null, right: string) {
+  if (!left) {
+    return Number.POSITIVE_INFINITY;
+  }
+
+  const leftDate = new Date(`${left}T00:00:00`).getTime();
+  const rightDate = new Date(`${right}T00:00:00`).getTime();
+  return Math.abs(Math.round((leftDate - rightDate) / 86_400_000));
+}
+
+function getAmazonMatchAmountCandidates(amountCents: number) {
+  return Array.from(new Set([amountCents, -amountCents]));
+}
+
+function createAmazonMatch(
+  payment: AmazonPaymentTransaction,
+  orderById: Map<string, AmazonOrder>,
+  itemsByOrderId: Map<string, AmazonOrderItem[]>
+): AmazonTransactionMatch {
+  const order = orderById.get(payment.order_id) ?? null;
+  return {
+    paymentTransactionId: payment.id,
+    orderId: payment.order_id,
+    transactionDate: payment.transaction_date,
+    amountCents: payment.amount_cents,
+    merchantText: payment.merchant_text,
+    isRefund: payment.is_refund,
+    order: order
+      ? {
+          orderDetailUrl: order.order_detail_url,
+          itemSubtotalCents: order.item_subtotal_cents,
+          shippingCents: order.shipping_cents,
+          discountsCents: order.discounts_cents,
+          taxCents: order.tax_cents,
+          grandTotalCents: order.grand_total_cents,
+        }
+      : null,
+    items: (itemsByOrderId.get(payment.order_id) ?? []).map((item) => ({
+      id: item.id,
+      title: item.title,
+      priceCents: item.price_cents,
+      asin: item.asin,
+      quantity: item.quantity,
+      sortOrder: item.sort_order,
+    })),
+  };
+}
+
+export default async function TransactionsPage({ searchParams }: TransactionsPageProps) {
   const supabase = createServerSupabaseClient();
   const {
     data: { user },
@@ -25,14 +143,56 @@ export default async function TransactionsPage() {
   }
 
   const household = await getCurrentHousehold(supabase);
-  const [{ data: transactionRows }, { data: uncategorizedRows }, { data: categoryRows }, { data: tagRows }] = household
+  const selectedPage = getSelectedPage(searchParams?.page);
+  const sortColumn = getSortColumn(searchParams?.sort);
+  const sortDirection = getSortDirection(searchParams?.dir);
+  const searchText = getSearchText(searchParams?.q);
+  const fromDate = isIsoDate(searchParams?.from) ? searchParams?.from : '';
+  const toDate = isIsoDate(searchParams?.to) ? searchParams?.to : '';
+  const selectedAccountId = searchParams?.accountId ?? '';
+  const selectedCategoryId = searchParams?.categoryId ?? '';
+
+  let transactionsQuery = household
+    ? supabase
+        .from('transactions')
+        .select('*, accounts(name)', { count: 'exact' })
+        .eq('household_id', household.id)
+    : null;
+
+  if (transactionsQuery && searchText) {
+    transactionsQuery = transactionsQuery.or(`merchant_name.ilike.%${searchText}%,description.ilike.%${searchText}%`);
+  }
+  if (transactionsQuery && selectedAccountId) {
+    transactionsQuery = transactionsQuery.eq('account_id', selectedAccountId);
+  }
+  if (transactionsQuery && selectedCategoryId === 'uncategorized') {
+    transactionsQuery = transactionsQuery.is('category_id', null);
+  } else if (transactionsQuery && selectedCategoryId) {
+    transactionsQuery = transactionsQuery.eq('category_id', selectedCategoryId);
+  }
+  if (transactionsQuery && fromDate) {
+    transactionsQuery = transactionsQuery.gte('date', fromDate);
+  }
+  if (transactionsQuery && toDate) {
+    transactionsQuery = transactionsQuery.lte('date', toDate);
+  }
+
+  const rangeFrom = (selectedPage - 1) * PAGE_SIZE;
+  const rangeTo = rangeFrom + PAGE_SIZE - 1;
+  const pagedTransactionsQuery = transactionsQuery
+    ?.order(sortColumn, { ascending: sortDirection === 'asc', nullsFirst: false })
+    .order('id', { ascending: true })
+    .range(rangeFrom, rangeTo);
+
+  const [
+    transactionResult,
+    { data: uncategorizedRows },
+    { data: categoryRows },
+    { data: tagRows },
+    { data: accountRows },
+  ] = household
     ? await Promise.all([
-        supabase
-          .from('transactions')
-          .select('*, accounts(name)')
-          .eq('household_id', household.id)
-          .order('date', { ascending: false })
-          .limit(100),
+        pagedTransactionsQuery ?? Promise.resolve({ data: [], count: 0 }),
         supabase
           .from('transactions')
           .select('*, accounts(name)')
@@ -47,8 +207,18 @@ export default async function TransactionsPage() {
           .order('sort_order', { ascending: true })
           .order('name', { ascending: true }),
         supabase.from('tags').select('id, name, color').eq('household_id', household.id).order('name'),
+        supabase.from('accounts').select('id, name').eq('household_id', household.id).order('name'),
       ])
-    : [{ data: [] }, { data: [] }, { data: [] }, { data: [] }];
+    : [
+        { data: [], count: 0 },
+        { data: [] },
+        { data: [] },
+        { data: [] },
+        { data: [] },
+      ];
+  const transactionRows = transactionResult.data ?? [];
+  const totalTransactionCount = transactionResult.count ?? transactionRows.length;
+  const totalPages = Math.max(1, Math.ceil(totalTransactionCount / PAGE_SIZE));
   const transactionIds = [
     ...(transactionRows ?? []).map((transaction) => transaction.id),
     ...(uncategorizedRows ?? []).map((transaction) => transaction.id),
@@ -87,6 +257,75 @@ export default async function TransactionsPage() {
     .filter((transaction) => transaction.transaction_split_count === 0) as EditableTransactionRow[];
   const categories = (categoryRows ?? []) as Pick<Category, 'id' | 'name'>[];
   const tags = (tagRows ?? []) as Pick<Tag, 'id' | 'name' | 'color'>[];
+  const accountOptions = (accountRows ?? []) as { id: string; name: string }[];
+  const resultStart = totalTransactionCount === 0 ? 0 : rangeFrom + 1;
+  const resultEnd = Math.min(totalTransactionCount, rangeFrom + transactions.length);
+
+  const amazonMatchByTransactionId = new Map<string, AmazonTransactionMatch>();
+  if (household && uncategorizedTransactions.length > 0) {
+    const dates = uncategorizedTransactions.map((transaction) => transaction.date).sort();
+    const amountCandidates = Array.from(
+      new Set(uncategorizedTransactions.flatMap((transaction) => getAmazonMatchAmountCandidates(transaction.amount_cents)))
+    );
+    const startDate = addDays(dates[0], -5);
+    const endDate = addDays(dates[dates.length - 1], 5);
+    const { data: amazonPaymentRows } =
+      amountCandidates.length > 0
+        ? await supabase
+            .from('amazon_payment_transactions')
+            .select('*')
+            .eq('household_id', household.id)
+            .in('amount_cents', amountCandidates)
+            .gte('transaction_date', startDate)
+            .lte('transaction_date', endDate)
+        : { data: [] };
+    const amazonPayments = (amazonPaymentRows ?? []) as AmazonPaymentTransaction[];
+    const orderIds = Array.from(new Set(amazonPayments.map((payment) => payment.order_id)));
+    const [{ data: amazonOrderRows }, { data: amazonItemRows }] =
+      orderIds.length > 0
+        ? await Promise.all([
+            supabase.from('amazon_orders').select('*').eq('household_id', household.id).in('order_id', orderIds),
+            supabase
+              .from('amazon_order_items')
+              .select('*')
+              .eq('household_id', household.id)
+              .in('order_id', orderIds)
+              .order('sort_order', { ascending: true }),
+          ])
+        : [{ data: [] }, { data: [] }];
+    const orderById = new Map(((amazonOrderRows ?? []) as AmazonOrder[]).map((order) => [order.order_id, order]));
+    const itemsByOrderId = new Map<string, AmazonOrderItem[]>();
+    ((amazonItemRows ?? []) as AmazonOrderItem[]).forEach((item) => {
+      itemsByOrderId.set(item.order_id, [...(itemsByOrderId.get(item.order_id) ?? []), item]);
+    });
+
+    uncategorizedTransactions.forEach((transaction) => {
+      const exactLinkedPayment = amazonPayments.find((payment) => payment.plaid_transaction_id === transaction.id);
+      const amountCandidatesForTransaction = new Set(getAmazonMatchAmountCandidates(transaction.amount_cents));
+      const candidatePayments = amazonPayments
+        .filter(
+          (payment) =>
+            !payment.plaid_transaction_id &&
+            amountCandidatesForTransaction.has(payment.amount_cents) &&
+            getDateDistanceDays(payment.transaction_date, transaction.date) <= 5
+        )
+        .sort(
+          (left, right) =>
+            getDateDistanceDays(left.transaction_date, transaction.date) -
+              getDateDistanceDays(right.transaction_date, transaction.date) ||
+            (right.transaction_date ?? '').localeCompare(left.transaction_date ?? '')
+        );
+      const match = exactLinkedPayment ?? candidatePayments[0];
+      if (match) {
+        amazonMatchByTransactionId.set(transaction.id, createAmazonMatch(match, orderById, itemsByOrderId));
+      }
+    });
+  }
+
+  const uncategorizedTransactionsWithAmazonMatches = uncategorizedTransactions.map((transaction) => ({
+    ...transaction,
+    amazon_match: amazonMatchByTransactionId.get(transaction.id) ?? null,
+  }));
 
   return (
     <Container maxWidth="lg">
@@ -102,7 +341,11 @@ export default async function TransactionsPage() {
           </Box>
           {household ? (
             <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1.5} alignItems={{ xs: 'stretch', sm: 'flex-start' }}>
-              <CategorizationModeButton transactions={uncategorizedTransactions} categories={categories} tags={tags} />
+              <CategorizationModeButton
+                transactions={uncategorizedTransactionsWithAmazonMatches}
+                categories={categories}
+                tags={tags}
+              />
               <SyncTransactionsButton />
             </Stack>
           ) : null}
@@ -112,12 +355,76 @@ export default async function TransactionsPage() {
           <Box sx={{ p: 3 }}>
             <Typography variant="h6">Latest transactions</Typography>
             <Typography variant="body2" color="text.secondary">
-              Showing the 100 most recent transactions. Save changes per row as you categorize and annotate.
+              Showing {resultStart}-{resultEnd} of {totalTransactionCount} transactions. Save changes per row as you
+              categorize and annotate.
             </Typography>
+            <Box component="form" action="/transactions" method="get" sx={{ mt: 2 }}>
+              <Stack direction={{ xs: 'column', lg: 'row' }} spacing={1.5} alignItems={{ xs: 'stretch', lg: 'center' }}>
+                <TextField size="small" name="q" label="Search" defaultValue={searchText} />
+                <TextField size="small" name="from" label="From" type="date" defaultValue={fromDate} InputLabelProps={{ shrink: true }} />
+                <TextField size="small" name="to" label="To" type="date" defaultValue={toDate} InputLabelProps={{ shrink: true }} />
+                <TextField size="small" select name="accountId" label="Account" defaultValue={selectedAccountId} sx={{ minWidth: 180 }}>
+                  <MenuItem value="">All accounts</MenuItem>
+                  {accountOptions.map((account) => (
+                    <MenuItem key={account.id} value={account.id}>
+                      {account.name}
+                    </MenuItem>
+                  ))}
+                </TextField>
+                <TextField size="small" select name="categoryId" label="Category" defaultValue={selectedCategoryId} sx={{ minWidth: 190 }}>
+                  <MenuItem value="">All categories</MenuItem>
+                  <MenuItem value="uncategorized">Uncategorized</MenuItem>
+                  {categories.map((category) => (
+                    <MenuItem key={category.id} value={category.id}>
+                      {category.name}
+                    </MenuItem>
+                  ))}
+                </TextField>
+                <TextField size="small" select name="sort" label="Sort" defaultValue={sortColumn} sx={{ minWidth: 150 }}>
+                  <MenuItem value="date">Date</MenuItem>
+                  <MenuItem value="amount_cents">Amount</MenuItem>
+                  <MenuItem value="merchant_name">Merchant</MenuItem>
+                  <MenuItem value="description">Description</MenuItem>
+                </TextField>
+                <TextField size="small" select name="dir" label="Direction" defaultValue={sortDirection} sx={{ minWidth: 130 }}>
+                  <MenuItem value="desc">Desc</MenuItem>
+                  <MenuItem value="asc">Asc</MenuItem>
+                </TextField>
+                <Button type="submit" variant="contained">
+                  Apply
+                </Button>
+                <Button component={Link} href="/transactions" variant="outlined">
+                  Reset
+                </Button>
+              </Stack>
+            </Box>
           </Box>
           <Divider />
           {transactions.length > 0 ? (
-            <TransactionsTable transactions={transactions} categories={categories} tags={tags} />
+            <>
+              <TransactionsTable transactions={transactions} categories={categories} tags={tags} />
+              <Stack direction="row" spacing={1} justifyContent="space-between" alignItems="center" sx={{ p: 2 }}>
+                <Button
+                  component={Link}
+                  href={buildTransactionsHref(searchParams, { page: Math.max(1, selectedPage - 1) })}
+                  variant="outlined"
+                  disabled={selectedPage <= 1}
+                >
+                  Previous
+                </Button>
+                <Typography variant="body2" color="text.secondary">
+                  Page {selectedPage} of {totalPages}
+                </Typography>
+                <Button
+                  component={Link}
+                  href={buildTransactionsHref(searchParams, { page: Math.min(totalPages, selectedPage + 1) })}
+                  variant="outlined"
+                  disabled={selectedPage >= totalPages}
+                >
+                  Next
+                </Button>
+              </Stack>
+            </>
           ) : (
             <Box sx={{ p: 3 }}>
               <Typography color="text.secondary">No transactions synced yet.</Typography>

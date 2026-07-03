@@ -27,6 +27,11 @@
 /assets/formulas-summary.*
 /assets/**/*.xlsx
 /assets/**/*.csv
+/assets/**/*.heic
+/assets/**/*.jpg
+/assets/**/*.jpeg
+/assets/**/*.mov
+/assets/**/*.mp4
 
 # debug
 npm-debug.log*
