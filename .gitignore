@@ -19,6 +19,20 @@
 .DS_Store
 *.pem
 
+# local/private research and import artifacts
+/assets/from-google/
+/assets/example-screenshots/
+/assets/amazon-snaps/
+/assets/ux-cleanup/
+/assets/formulas-summary.*
+/assets/**/*.xlsx
+/assets/**/*.csv
+/assets/**/*.heic
+/assets/**/*.jpg
+/assets/**/*.jpeg
+/assets/**/*.mov
+/assets/**/*.mp4
+
 # debug
 npm-debug.log*
 yarn-debug.log*
