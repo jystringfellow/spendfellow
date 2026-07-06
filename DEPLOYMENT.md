@@ -4,7 +4,7 @@ Spendfellow is designed so the reusable application code can be public while eac
 
 ## Recommended Model
 
-Use this public repository as the template/source repository, then create one private repository for your own deployment:
+Use this public repository as the source repository, then create one private repository for your own deployment:
 
 - This public Spendfellow repository for reusable app code.
 - A private deployment repository connected to Vercel.
@@ -22,11 +22,30 @@ your private deployment repo
   Vercel connected to private deployment repo
 ```
 
-This keeps credentials out of Git while still letting you pull reusable app updates into your private deployment.
+This keeps credentials out of Git while still letting you pull reusable app updates into your private deployment. The private repository can stay nearly identical to the public one; put deployment-specific values in Supabase, Plaid, Vercel, and local environment variables instead of hard-coding them.
 
 ## Why Not a Private Fork?
 
 GitHub forks usually inherit the visibility of the source repository. A fork of a public repository is public. If you want a private deployment repository, create a separate private repository instead of using GitHub's fork button.
+
+## Public Repo Safety Checklist
+
+Before publishing or connecting deployment automation, verify that Git only contains reusable code and neutral assets:
+
+```bash
+git status --short
+git ls-files
+git log --all --name-only --pretty=format: | sort -u
+```
+
+The public repository should not track:
+
+- `.env`, `.env.local`, `.vercel/`, `.next/`, `node_modules/`, or `*.tsbuildinfo`
+- Plaid secrets, Plaid access tokens, Supabase secret keys, Vercel tokens, GitHub tokens, private keys, or cookies
+- Bank statements, spreadsheet exports, screenshots containing real balances or transactions, Amazon order captures, receipt images, or other financial evidence
+- Household-specific category names, merchant notes, account names, or seed data unless intentionally neutralized
+
+Ignored local research artifacts may exist on your machine under folders such as `assets/from-google/`, `assets/example-screenshots/`, `assets/amazon-snaps/`, and `assets/ux-cleanup/`. That is fine as long as they have never been committed. If a private file was committed, remove it from Git tracking with `git rm --cached` before publishing. If it was already pushed to a public repository, treat the data as exposed and rotate affected credentials.
 
 ## Repository Setup For Your Private Deployment
 
@@ -43,10 +62,12 @@ git remote -v
 Push the current code to your private deployment repository:
 
 ```bash
-git push origin main
+git push -u origin main
 ```
 
 From then on, `origin` is your private deployment repo and `upstream` is this public template/source repo.
+
+If you already cloned the public repository and want to reuse that local checkout for your private deployment, run the same remote rename/add commands from the existing checkout after creating the empty private repository.
 
 ## Pulling Public Updates Into Your Private Deployment Repo
 
@@ -54,9 +75,11 @@ When this public repository changes, pull those updates into your private deploy
 
 ```bash
 git fetch upstream
-git merge upstream/main
+git merge --ff-only upstream/main
 git push origin main
 ```
+
+Use `git merge upstream/main` instead of `--ff-only` only if your private repository intentionally has private commits that are not in the public repository. Prefer keeping private changes small so updates stay easy.
 
 If Vercel is connected to the private repository, pushing to the configured production branch can trigger a deployment.
 
@@ -69,20 +92,32 @@ upstream -> public Spendfellow repository
 origin   -> private deployment repository
 ```
 
-Push reusable changes to `upstream`, then merge or push deployable changes to `origin`:
+To convert this local checkout into that maintainer layout after creating an empty private GitHub repository:
+
+```bash
+git remote rename origin upstream
+git remote add origin git@github.com:you/spendfellow-private.git
+git push -u origin main
+```
+
+Push reusable changes to `upstream`, then push the deployable branch to `origin`:
 
 ```bash
 git push upstream main
 git push origin main
 ```
 
+Before pushing to the public `upstream`, run the safety checklist above and confirm private artifacts remain ignored.
+
 ## Vercel Setup
 
 1. Create a private GitHub repository for your deployment.
 2. Import that private repository in Vercel.
-3. Set all real environment variables in the Vercel dashboard.
-4. Keep `.env.local` local only.
-5. Use a production HTTPS URL for Plaid OAuth redirects.
+3. Set the Vercel framework preset to Next.js.
+4. Use `pnpm install --frozen-lockfile` as the install command if Vercel does not infer pnpm from `pnpm-lock.yaml`.
+5. Set all real environment variables in the Vercel dashboard.
+6. Keep `.env.local` local only.
+7. Use a production HTTPS URL for Plaid OAuth redirects.
 
 Required environment variables:
 
@@ -94,11 +129,16 @@ SUPABASE_SECRET_KEY=your_supabase_secret_key
 PLAID_CLIENT_ID=your_plaid_client_id
 PLAID_ENV=production
 PLAID_SANDBOX_SECRET=your_plaid_secret_sandbox
+PLAID_DEVELOPMENT_SECRET=your_plaid_secret_development
 PLAID_PRODUCTION_SECRET=your_plaid_secret_production
 PLAID_REDIRECT_URI=https://your-app-domain.example/accounts
 
 NEXT_PUBLIC_APP_URL=https://your-app-domain.example
 ```
+
+For a Sandbox-only deployment, set `PLAID_ENV=sandbox` and omit production/development secrets if you are not using those environments. For production bank connections, set `PLAID_ENV=production`, add `PLAID_PRODUCTION_SECRET`, and register the exact `PLAID_REDIRECT_URI` in Plaid.
+
+Do not set `SUPABASE_SECRET_KEY` as a `NEXT_PUBLIC_` variable. It must remain server-only.
 
 ## Template Setup Checklist
 
@@ -115,12 +155,6 @@ When using Spendfellow as a starting point for your own financial tracker, keep 
 
 The public repository should contain reusable application code, schema, neutral sample data, and documentation. The private deployment repository can carry deployment-specific history, but it still should not contain secrets or financial exports.
 
-## Private Local Files
-
-Local research artifacts are ignored by default under folders such as `assets/from-google/`, `assets/example-screenshots/`, `assets/amazon-snaps/`, and `assets/ux-cleanup/`. Common photo/video files under `assets/` are also ignored so accidental screenshots and phone exports do not show up as untracked files.
-
-Ignoring a file is enough if it has never been committed. If a private file was committed, remove it from Git tracking with `git rm --cached` and rewrite any unpushed commit before publishing. If it was already pushed to a public repository, treat it as exposed and rotate any affected credentials.
-
 ## Supabase Setup
 
 Each deployment should use its own Supabase project.
@@ -130,6 +164,23 @@ Each deployment should use its own Supabase project.
 3. Configure Supabase Auth.
 4. Disable public/self-service signups if available.
 5. Add invited users from Supabase Auth, not from the Spendfellow app.
+
+For Supabase Auth, configure these URLs:
+
+```text
+Site URL: https://your-app-domain.example
+Redirect URL: https://your-app-domain.example/auth/callback
+```
+
+For local development, also allow:
+
+```text
+http://localhost:3000/auth/callback
+```
+
+Spendfellow has no public signup screen and sends magic links with `shouldCreateUser: false`, but Supabase Auth should still be configured to reject public/self-service signups where your project settings allow it.
+
+After the first user signs in, use the app settings seed action or your admin SQL flow to create the household bootstrap data. Add additional users to the existing household from an admin/database flow before expecting them to see shared household data.
 
 ## Plaid Setup
 
@@ -142,6 +193,34 @@ https://your-app-domain.example/accounts
 ```
 
 Local HTTP redirect URIs are useful for Sandbox and Development, but they are not valid for Plaid Production OAuth.
+
+If you change the deployed domain later, update all three places together:
+
+- `NEXT_PUBLIC_APP_URL` in Vercel
+- `PLAID_REDIRECT_URI` in Vercel
+- The allowed redirect URI in the Plaid Dashboard
+
+Then redeploy the Vercel project.
+
+## Deployment Work You Can Do Locally
+
+These steps can be completed from the repository checkout:
+
+```bash
+pnpm install
+pnpm type-check
+pnpm build
+git status --short
+```
+
+These steps require account access or dashboard credentials:
+
+- Create the private GitHub deployment repository.
+- Import the private repository into Vercel.
+- Create/configure the Supabase project and Auth URLs.
+- Add real environment variables in Vercel.
+- Create/configure the Plaid app and redirect URI.
+- Invite household users.
 
 ## Local Production OAuth Testing With Cloudflare Tunnel
 

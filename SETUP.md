@@ -47,29 +47,12 @@ This will install all required packages including Next.js, React, MUI, Supabase 
 1. In your Supabase project dashboard, click on the **SQL Editor** in the left sidebar
 2. Click "New Query"
 3. Open the migration files in `supabase/migrations/` from this repository
-4. Run them in filename order:
-   - `20260115000000_initial_schema.sql`
-   - `20260624000000_households.sql`
-   - `20260625000000_workbook_constants.sql`
-   - `20260626000000_household_recurring_values.sql`
-   - `20260627000000_fix_seed_household_bootstrap.sql`
-   - `20260628000000_fix_seed_rls_bootstrap.sql`
-   - `20260629000000_recurring_value_formulas.sql`
-   - `20260630000000_effective_constant_periods.sql`
-   - `20260701000000_recurring_billing_frequency.sql`
+4. Run every `*.sql` file in filename order, starting with `20260115000000_initial_schema.sql`
 5. Copy each file's contents into the Supabase SQL Editor
 6. Click "Run" to execute each migration
 7. You should see "Success. No rows returned" for most migration statements
 
-If you already ran the first two migrations before household support was added, run these next:
-
-- `20260624000000_households.sql`
-- `20260626000000_household_recurring_values.sql`
-- `20260627000000_fix_seed_household_bootstrap.sql`
-- `20260628000000_fix_seed_rls_bootstrap.sql`
-- `20260629000000_recurring_value_formulas.sql`
-- `20260630000000_effective_constant_periods.sql`
-- `20260701000000_recurring_billing_frequency.sql`
+If you already ran an older subset of migrations, run the remaining files in filename order. Most migrations use `IF NOT EXISTS`, `ON CONFLICT`, or compatibility guards where practical, but avoid skipping files unless you have verified the schema already includes that migration's changes.
 
 ### 3.3 Get Your Supabase Credentials
 
