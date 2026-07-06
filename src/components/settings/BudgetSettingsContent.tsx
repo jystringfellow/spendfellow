@@ -16,6 +16,7 @@ import {
   Typography,
 } from '@mui/material';
 import { redirect } from 'next/navigation';
+import Link from 'next/link';
 import { formatCurrency } from '@/lib/money';
 import {
   clampMonth,
@@ -26,6 +27,12 @@ import { createServerSupabaseClient } from '@/lib/supabaseServer';
 import { hasSupabaseEnv } from '@/lib/supabaseEnv';
 import { getCurrentHousehold } from '@/lib/households';
 import { formatFormulaDescription, resolveRecurringValues } from '@/lib/recurringValues';
+import {
+  ACCOUNT_BALANCE_CATEGORY_OPTIONS,
+  getAccountBalanceCategory,
+  getAccountBalanceCategoryLabel,
+  type AccountBalanceCategory,
+} from '@/lib/accountBalanceCategories';
 import type { ResolvedRecurringValue } from '@/lib/recurringValues';
 import type {
   Category,
@@ -57,9 +64,8 @@ import {
   updateFixedRecurringValue,
   updateRecurringFormula,
   updateTag,
-} from './actions';
-
-export const dynamic = 'force-dynamic';
+} from '@/app/constants/actions';
+import type { ReactNode } from 'react';
 
 interface RecurringValueRow extends ResolvedRecurringValue {
   categoryName: string;
@@ -71,6 +77,8 @@ interface ConstantsPageProps {
     year?: string;
     month?: string;
   };
+  embedded?: boolean;
+  trailingContent?: ReactNode;
 }
 
 function getMonthLabel(month: number | null): string {
@@ -120,18 +128,6 @@ function isBudgetGroup(group: Category): boolean {
   return !isIncomeGroup(group);
 }
 
-function isNeedsGroup(group: Category): boolean {
-  return group.group_key === 'needs' || group.name.toLowerCase().includes('needs');
-}
-
-function isBigWantsGroup(group: Category): boolean {
-  return group.group_key === 'bigWants' || group.name.toLowerCase().includes('big');
-}
-
-function isCashBalanceAccount(account: Account): boolean {
-  return account.is_active && account.current_balance_cents !== null && !['credit', 'investment'].includes(account.type);
-}
-
 function buildRecurringRows(
   recurringValues: RecurringValue[],
   dependencies: RecurringValueDependency[],
@@ -155,20 +151,33 @@ function buildRecurringRows(
   });
 }
 
-export default async function ConstantsPage({ searchParams }: ConstantsPageProps) {
+function getBalanceCategoryTotalCents(accounts: Account[], category: AccountBalanceCategory): number {
+  return accounts
+    .filter((account) => getAccountBalanceCategory(account) === category)
+    .reduce((total, account) => {
+      const amount = Math.abs(account.current_balance_cents ?? 0);
+      return total + (category === 'ccDebt' ? -amount : amount);
+    }, 0);
+}
+
+export async function BudgetSettingsContent({ searchParams, embedded = false, trailingContent }: ConstantsPageProps) {
   const now = new Date();
   const selectedYear = Number(searchParams?.year) || now.getFullYear();
   const selectedMonth = clampMonth(Number(searchParams?.month) || now.getMonth() + 1);
 
   if (!hasSupabaseEnv()) {
-    return (
+    const content = (
+      <Box sx={{ my: embedded ? 0 : 4 }}>
+        <Alert severity="warning">
+          Supabase is not configured. Add the Supabase environment variables before loading database-backed
+          constants.
+        </Alert>
+      </Box>
+    );
+
+    return embedded ? content : (
       <Container maxWidth="lg">
-        <Box sx={{ my: 4 }}>
-          <Alert severity="warning">
-            Supabase is not configured. Add the Supabase environment variables before loading database-backed
-            constants.
-          </Alert>
-        </Box>
+        {content}
       </Container>
     );
   }
@@ -269,19 +278,11 @@ export default async function ConstantsPage({ searchParams }: ConstantsPageProps
   const transferGroups = groups.filter((group) => !isBudgetGroup(group));
   const childCategories = categories.filter((category) => !category.is_group);
   const totalBudgetCents = getTotalBudgetCents(budgetGroups, categories, categoryPeriods, selectedYear, selectedMonth);
-  const needsGroup = budgetGroups.find(isNeedsGroup);
-  const bigWantsGroup = budgetGroups.find(isBigWantsGroup);
-  const needsMonthlyBudgetCents = needsGroup
-    ? getGroupTotalCents(needsGroup, categories, categoryPeriods, selectedYear, selectedMonth)
-    : 0;
-  const bigWantsMonthlyBudgetCents = bigWantsGroup
-    ? getGroupTotalCents(bigWantsGroup, categories, categoryPeriods, selectedYear, selectedMonth)
-    : 0;
-  const cashBalanceCents = accounts
-    .filter(isCashBalanceAccount)
-    .reduce((total, account) => total + (account.current_balance_cents ?? 0), 0);
-  const bigWantsCapacityCents = cashBalanceCents - needsMonthlyBudgetCents * 12;
-  const bigWantsCapacityDifferenceCents = bigWantsCapacityCents - bigWantsMonthlyBudgetCents;
+  const hiddenBalanceAccounts = accounts.filter((account) => getAccountBalanceCategory(account) === 'hidden');
+  const visibleBalanceCategories = ACCOUNT_BALANCE_CATEGORY_OPTIONS.map((option) => ({
+    ...option,
+    totalCents: getBalanceCategoryTotalCents(accounts, option.value),
+  }));
   const recurringRows = buildRecurringRows(
     recurringValues,
     dependencies,
@@ -293,14 +294,13 @@ export default async function ConstantsPage({ searchParams }: ConstantsPageProps
   const recurringInputRows = recurringRows.filter((value) => value.kind === 'fixed');
   const recurringFormulaRows = recurringRows.filter((value) => value.kind === 'formula');
 
-  return (
-    <Container maxWidth="lg">
-      <Box sx={{ my: 4 }}>
+  const content = (
+    <Box sx={{ my: embedded ? 0 : 4 }}>
         <Typography variant="h4" component="h1" gutterBottom>
-          Settings
+          Budget Settings
         </Typography>
         <Typography variant="body1" color="text.secondary" sx={{ maxWidth: 780 }}>
-          Manage category budgets, recurring planning values, formulas, and tags.
+          Manage category budgets, recurring planning values, account balance buckets, formulas, and tags.
         </Typography>
         {household && <Chip label={household.name} sx={{ mt: 2 }} />}
 
@@ -417,33 +417,49 @@ export default async function ConstantsPage({ searchParams }: ConstantsPageProps
             </Paper>
 
             <Paper sx={{ p: 3 }}>
-              <Typography variant="h6" component="h2" gutterBottom>
-                Big Wants Capacity
-              </Typography>
+              <Box
+                sx={{
+                  display: 'flex',
+                  justifyContent: 'space-between',
+                  alignItems: { xs: 'flex-start', sm: 'center' },
+                  flexDirection: { xs: 'column', sm: 'row' },
+                  gap: 1,
+                  mb: 2,
+                }}
+              >
+                <Box>
+                  <Typography variant="h6" component="h2">
+                    Budget Balance Categories
+                  </Typography>
+                  <Typography variant="body2" color="text.secondary">
+                    These are the account balance buckets shown on Accounts and the budget sheet.
+                  </Typography>
+                </Box>
+                <Button component={Link} href="/accounts" variant="outlined">
+                  Assign accounts
+                </Button>
+              </Box>
               <TableContainer>
-                <Table size="small" aria-label="big wants capacity">
+                <Table size="small" aria-label="budget balance categories">
+                  <TableHead>
+                    <TableRow>
+                      <TableCell>Category</TableCell>
+                      <TableCell>Included in balance cards</TableCell>
+                      <TableCell align="right">Current balance</TableCell>
+                    </TableRow>
+                  </TableHead>
                   <TableBody>
+                    {visibleBalanceCategories.map((category) => (
+                      <TableRow key={category.value}>
+                        <TableCell sx={{ fontWeight: 700 }}>{category.label}</TableCell>
+                        <TableCell>Yes</TableCell>
+                        <TableCell align="right">{formatCurrency(category.totalCents)}</TableCell>
+                      </TableRow>
+                    ))}
                     <TableRow>
-                      <TableCell>Cash balance from active bank accounts</TableCell>
-                      <TableCell align="right">{formatCurrency(cashBalanceCents)}</TableCell>
-                    </TableRow>
-                    <TableRow>
-                      <TableCell>Annual Needs budget</TableCell>
-                      <TableCell align="right">{formatCurrency(needsMonthlyBudgetCents * 12)}</TableCell>
-                    </TableRow>
-                    <TableRow>
-                      <TableCell sx={{ fontWeight: 700 }}>Suggested Big Wants capacity</TableCell>
-                      <TableCell align="right" sx={{ fontWeight: 700 }}>
-                        {formatCurrency(bigWantsCapacityCents)}
-                      </TableCell>
-                    </TableRow>
-                    <TableRow>
-                      <TableCell>Current Big Wants budget</TableCell>
-                      <TableCell align="right">{formatCurrency(bigWantsMonthlyBudgetCents)}</TableCell>
-                    </TableRow>
-                    <TableRow>
-                      <TableCell>Difference from suggested capacity</TableCell>
-                      <TableCell align="right">{formatCurrency(bigWantsCapacityDifferenceCents)}</TableCell>
+                      <TableCell sx={{ fontWeight: 700 }}>{getAccountBalanceCategoryLabel('hidden')}</TableCell>
+                      <TableCell>No</TableCell>
+                      <TableCell align="right">{hiddenBalanceAccounts.length ? 'Hidden' : '-'}</TableCell>
                     </TableRow>
                   </TableBody>
                 </Table>
@@ -464,7 +480,14 @@ export default async function ConstantsPage({ searchParams }: ConstantsPageProps
                 <Typography variant="h6" component="h2">
                   Category Budgets
                 </Typography>
-                <Chip label={`Budget Total ${formatCurrency(totalBudgetCents)}`} color="primary" />
+                <CategoryDialogButton
+                  mode="add"
+                  action={createCategory}
+                  householdId={household?.id ?? ''}
+                  year={selectedYear}
+                  startMonth={selectedMonth}
+                  groups={groups}
+                />
               </Box>
 
               <TableContainer>
@@ -553,15 +576,8 @@ export default async function ConstantsPage({ searchParams }: ConstantsPageProps
                   </TableBody>
                 </Table>
               </TableContainer>
-              <Box sx={{ mt: 2 }}>
-                <CategoryDialogButton
-                  mode="add"
-                  action={createCategory}
-                  householdId={household?.id ?? ''}
-                  year={selectedYear}
-                  startMonth={selectedMonth}
-                  groups={groups}
-                />
+              <Box sx={{ display: 'flex', justifyContent: 'flex-end', mt: 2 }}>
+                <Chip label={`Budget Total ${formatCurrency(totalBudgetCents)}`} color="primary" />
               </Box>
             </Paper>
 
@@ -718,7 +734,13 @@ export default async function ConstantsPage({ searchParams }: ConstantsPageProps
             </Paper>
           </Box>
         )}
+        {trailingContent ? <Box sx={{ mt: 3 }}>{trailingContent}</Box> : null}
       </Box>
+  );
+
+  return embedded ? content : (
+    <Container maxWidth="lg">
+      {content}
     </Container>
   );
 }

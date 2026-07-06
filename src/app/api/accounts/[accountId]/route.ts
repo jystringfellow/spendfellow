@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { isAccountBalanceCategory } from '@/lib/accountBalanceCategories';
 import { getCurrentHousehold } from '@/lib/households';
 import { createServerSupabaseClient } from '@/lib/supabaseServer';
 import { createServiceSupabaseClient } from '@/lib/supabaseService';
@@ -11,6 +12,7 @@ interface RouteParams {
 
 interface UpdateAccountPayload {
   name?: string;
+  balance_category?: string | null;
 }
 
 function normalizeAccountName(value: unknown) {
@@ -24,10 +26,30 @@ function normalizeAccountName(value: unknown) {
 
 export async function PATCH(request: NextRequest, { params }: RouteParams) {
   const payload = (await request.json().catch(() => ({}))) as UpdateAccountPayload;
-  const name = normalizeAccountName(payload.name);
+  const updates: { name?: string; balance_category?: UpdateAccountPayload['balance_category']; updated_at: string } = {
+    updated_at: new Date().toISOString(),
+  };
 
-  if (!name) {
-    return NextResponse.json({ error: 'Account name is required.' }, { status: 400 });
+  if ('name' in payload) {
+    const name = normalizeAccountName(payload.name);
+
+    if (!name) {
+      return NextResponse.json({ error: 'Account name is required.' }, { status: 400 });
+    }
+
+    updates.name = name;
+  }
+
+  if ('balance_category' in payload) {
+    if (payload.balance_category !== null && !isAccountBalanceCategory(payload.balance_category)) {
+      return NextResponse.json({ error: 'Choose a valid balance category.' }, { status: 400 });
+    }
+
+    updates.balance_category = payload.balance_category;
+  }
+
+  if (!updates.name && !('balance_category' in updates)) {
+    return NextResponse.json({ error: 'No account updates provided.' }, { status: 400 });
   }
 
   const supabase = createServerSupabaseClient();
@@ -62,7 +84,7 @@ export async function PATCH(request: NextRequest, { params }: RouteParams) {
 
   const { error: updateError } = await serviceSupabase
     .from('accounts')
-    .update({ name, updated_at: new Date().toISOString() })
+    .update(updates)
     .eq('id', params.accountId)
     .eq('household_id', household.id);
 
@@ -70,5 +92,5 @@ export async function PATCH(request: NextRequest, { params }: RouteParams) {
     return NextResponse.json({ error: updateError.message }, { status: 500 });
   }
 
-  return NextResponse.json({ account: { id: params.accountId, name } });
+  return NextResponse.json({ account: { id: params.accountId, ...updates } });
 }

@@ -1,13 +1,20 @@
 import { redirect } from 'next/navigation';
-import Link from 'next/link';
-import { Box, Button, Container, Divider, Paper, Stack, Typography } from '@mui/material';
+import { Box, Container, Paper, Stack, Typography } from '@mui/material';
+import { BudgetSettingsContent } from '@/components/settings/BudgetSettingsContent';
 import AmazonSyncPanel from '@/components/settings/AmazonSyncPanel';
 import { getCurrentHousehold } from '@/lib/households';
 import { createServerSupabaseClient } from '@/lib/supabaseServer';
 
 export const dynamic = 'force-dynamic';
 
-export default async function SettingsPage() {
+interface SettingsPageProps {
+  searchParams?: {
+    year?: string;
+    month?: string;
+  };
+}
+
+export default async function SettingsPage({ searchParams }: SettingsPageProps) {
   const supabase = createServerSupabaseClient();
   const {
     data: { user },
@@ -22,40 +29,29 @@ export default async function SettingsPage() {
   return (
     <Container maxWidth="lg">
       <Box sx={{ my: 4 }}>
-        <Stack spacing={3}>
-          <Box>
-            <Typography variant="h4" component="h1" gutterBottom>
-              Settings
-            </Typography>
-            <Typography color="text.secondary">Manage app configuration and private import helpers.</Typography>
-          </Box>
-
-          {!household ? (
+        <BudgetSettingsContent
+          embedded
+          searchParams={searchParams}
+          trailingContent={
             <Paper sx={{ p: 3 }}>
-              <Typography color="text.secondary">
-                Create a household before connecting private import sources.
-              </Typography>
+              <Stack spacing={2}>
+                <Box>
+                  <Typography variant="h6">Import Tools</Typography>
+                  <Typography color="text.secondary">
+                    Optional helpers for importing transactions from external sources.
+                  </Typography>
+                </Box>
+                {!household ? (
+                  <Typography color="text.secondary">
+                    Create a household before connecting private import sources.
+                  </Typography>
+                ) : (
+                  <AmazonSyncPanel />
+                )}
+              </Stack>
             </Paper>
-          ) : (
-            <Paper sx={{ p: 3 }}>
-              <AmazonSyncPanel />
-            </Paper>
-          )}
-
-          <Paper sx={{ p: 3 }}>
-            <Stack spacing={2} alignItems="flex-start">
-              <Typography variant="h6">Budget Constants</Typography>
-              <Typography color="text.secondary">
-                Categories, tags, recurring values, and budget constants live on the constants screen.
-              </Typography>
-              <Button component={Link} href="/constants" variant="outlined">
-                Open constants
-              </Button>
-            </Stack>
-          </Paper>
-
-          <Divider />
-        </Stack>
+          }
+        />
       </Box>
     </Container>
   );

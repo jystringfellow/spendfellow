@@ -107,7 +107,6 @@ async function getCurrentUserId(): Promise<string> {
 }
 
 function revalidateSettingsPaths() {
-  revalidatePath('/constants');
   revalidatePath('/settings');
   revalidatePath('/transactions');
   revalidatePath('/budgets');

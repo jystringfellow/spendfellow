@@ -35,11 +35,24 @@ export interface Account {
   subtype: string | null;
   current_balance_cents: number | null;
   available_balance_cents: number | null;
+  balance_category: 'checking' | 'savings' | 'ccDebt' | 'investments' | 'hidden' | null;
   currency_code: string;
   is_active: boolean;
   last_balance_sync_at: string | null;
   created_at: string;
   updated_at: string;
+}
+
+export interface AccountBalanceSnapshot {
+  id: string;
+  user_id: string;
+  household_id: string | null;
+  account_id: string;
+  current_balance_cents: number | null;
+  available_balance_cents: number | null;
+  currency_code: string;
+  recorded_at: string;
+  created_at: string;
 }
 
 export interface PlaidItem {

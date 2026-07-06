@@ -87,7 +87,7 @@ export default function RefreshAccountsButton({
         aria-disabled={Boolean(message)}
         onClick={handleRefresh}
         sx={{
-          minWidth: size === 'small' ? 116 : 178,
+          minWidth: size === 'small' ? 178 : 178,
           ...(message
             ? {
                 pointerEvents: 'none',

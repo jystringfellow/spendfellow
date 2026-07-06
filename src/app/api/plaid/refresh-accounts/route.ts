@@ -33,6 +33,10 @@ function isMissingLastBalanceSyncColumn(error: { message?: string; code?: string
   );
 }
 
+function isMissingBalanceSnapshotsTable(error: { message?: string; code?: string } | null) {
+  return Boolean(error && (error.code === '42P01' || /account_balance_snapshots|schema cache/i.test(error.message ?? '')));
+}
+
 function getStartOfToday(): Date {
   const today = new Date();
   today.setHours(0, 0, 0, 0);
@@ -234,6 +238,52 @@ export async function POST(request: NextRequest) {
 
         if (accountsError) {
           return NextResponse.json({ error: accountsError.message }, { status: 500 });
+        }
+
+        const plaidAccountIds = accountRowsToUpsert.map((account) => account.plaid_account_id);
+        const { data: refreshedAccounts, error: refreshedAccountsError } = await serviceSupabase
+          .from('accounts')
+          .select('id, plaid_account_id')
+          .eq('household_id', household.id)
+          .eq('plaid_environment', plaidEnvironment)
+          .in('plaid_account_id', plaidAccountIds);
+
+        if (refreshedAccountsError) {
+          return NextResponse.json({ error: refreshedAccountsError.message }, { status: 500 });
+        }
+
+        const accountIdByPlaidAccountId = new Map(
+          ((refreshedAccounts ?? []) as Pick<Account, 'id' | 'plaid_account_id'>[]).map((account) => [
+            account.plaid_account_id,
+            account.id,
+          ])
+        );
+        const snapshotRows = accountRowsToUpsert
+          .map((account) => {
+            const accountId = accountIdByPlaidAccountId.get(account.plaid_account_id);
+
+            return accountId
+              ? {
+                  user_id: user.id,
+                  household_id: household.id,
+                  account_id: accountId,
+                  current_balance_cents: account.current_balance_cents,
+                  available_balance_cents: account.available_balance_cents,
+                  currency_code: account.currency_code,
+                  recorded_at: now,
+                }
+              : null;
+          })
+          .filter((row): row is NonNullable<typeof row> => row !== null);
+
+        if (snapshotRows.length > 0) {
+          const { error: snapshotError } = await serviceSupabase.from('account_balance_snapshots').upsert(snapshotRows, {
+            onConflict: 'account_id,recorded_at',
+          });
+
+          if (snapshotError && !isMissingBalanceSnapshotsTable(snapshotError)) {
+            return NextResponse.json({ error: snapshotError.message }, { status: 500 });
+          }
         }
       }
 

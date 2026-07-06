@@ -1,7 +1,7 @@
 'use client';
 
 import Image from 'next/image';
-import { AppBar, Toolbar, Typography, Button, Container, Box } from '@mui/material';
+import { AppBar, Toolbar, Typography, Button, Container, Box, IconButton, Tooltip } from '@mui/material';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import {
@@ -11,7 +11,10 @@ import {
   Category as CategoryIcon,
   Assessment as AssessmentIcon,
   Tune as TuneIcon,
+  DarkMode as DarkModeIcon,
+  LightMode as LightModeIcon,
 } from '@mui/icons-material';
+import { useAppThemeMode } from '@/components/layout/AppThemeProvider';
 
 const navItems = [
   { label: 'Home', path: '/', icon: HomeIcon },
@@ -24,11 +27,13 @@ const navItems = [
 
 export default function Navigation() {
   const pathname = usePathname();
+  const { mode, toggleMode } = useAppThemeMode();
+  const isDark = mode === 'dark';
 
   return (
     <AppBar position="static">
       <Container maxWidth="lg">
-        <Toolbar disableGutters sx={{ minHeight: { xs: 64, md: 72 } }}>
+        <Toolbar disableGutters sx={{ minHeight: { xs: 72, md: 86 } }}>
           <Box
             component={Link}
             href="/"
@@ -39,30 +44,36 @@ export default function Navigation() {
               gap: 1.2,
               textDecoration: 'none',
               color: 'inherit',
-              minWidth: { xs: 44, md: 190 },
+              minWidth: { xs: 56, md: 220 },
             }}
           >
             <Box
               sx={{
                 position: 'relative',
-                width: 38,
-                height: 38,
+                width: { xs: 48, md: 56 },
+                height: { xs: 48, md: 56 },
                 borderRadius: 1.5,
                 overflow: 'hidden',
                 flex: '0 0 auto',
               }}
             >
-              <Image src="/spendfellow-logo.png" alt="Spendfellow" fill sizes="38px" style={{ objectFit: 'cover' }} />
+              <Image
+                src="/spendfellow-logo.png"
+                alt="Spendfellow"
+                fill
+                sizes="(max-width: 900px) 48px, 56px"
+                style={{ objectFit: 'cover' }}
+              />
             </Box>
             <Box sx={{ display: { xs: 'none', md: 'block' } }}>
               <Typography variant="h6" sx={{ lineHeight: 1, fontWeight: 800, letterSpacing: 0 }}>
-                Spend<span style={{ color: '#6DFF2E' }}>fellow</span>
+                Spend<span style={{ color: isDark ? '#6DFF2E' : '#238A2D' }}>fellow</span>
               </Typography>
               <Typography
                 variant="caption"
                 sx={{
                   display: 'block',
-                  color: 'rgba(255, 255, 255, 0.7)',
+                  color: 'text.secondary',
                   fontWeight: 700,
                   letterSpacing: 1.6,
                   lineHeight: 1.3,
@@ -85,13 +96,14 @@ export default function Navigation() {
                   href={item.path}
                   startIcon={<Icon />}
                   sx={{
-                    color: isActive ? '#ffffff' : 'rgba(255, 255, 255, 0.76)',
+                    color: isActive ? 'text.primary' : 'text.secondary',
                     flex: '0 0 auto',
-                    border: isActive ? '1px solid rgba(98, 243, 63, 0.35)' : '1px solid transparent',
-                    backgroundColor: isActive ? 'rgba(98, 243, 63, 0.12)' : 'transparent',
+                    border: isActive ? '1px solid' : '1px solid transparent',
+                    borderColor: isActive ? 'primary.main' : 'transparent',
+                    backgroundColor: isActive ? 'action.selected' : 'transparent',
                     '&:hover': {
-                      color: '#ffffff',
-                      backgroundColor: 'rgba(124, 45, 255, 0.2)',
+                      color: 'text.primary',
+                      backgroundColor: 'action.hover',
                     },
                   }}
                 >
@@ -100,6 +112,25 @@ export default function Navigation() {
               );
             })}
           </Box>
+          <Tooltip title={`Switch to ${isDark ? 'light' : 'dark'} mode`}>
+            <IconButton
+              color="inherit"
+              aria-label={`Switch to ${isDark ? 'light' : 'dark'} mode`}
+              onClick={toggleMode}
+              sx={{
+                ml: 1,
+                border: '1px solid',
+                borderColor: 'divider',
+                color: 'text.secondary',
+                '&:hover': {
+                  color: 'text.primary',
+                  borderColor: 'primary.main',
+                },
+              }}
+            >
+              {isDark ? <LightModeIcon /> : <DarkModeIcon />}
+            </IconButton>
+          </Tooltip>
         </Toolbar>
       </Container>
     </AppBar>

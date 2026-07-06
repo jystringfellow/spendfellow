@@ -2,17 +2,23 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { Alert, Button, CircularProgress, Stack, ToggleButton, ToggleButtonGroup } from '@mui/material';
+import {
+  Alert,
+  Button,
+  CircularProgress,
+  Dialog,
+  DialogActions,
+  DialogContent,
+  DialogTitle,
+  Stack,
+  Typography,
+} from '@mui/material';
 import AddIcon from '@mui/icons-material/Add';
 import { PlaidLinkError, PlaidLinkOnEventMetadata, PlaidLinkOnExitMetadata, usePlaidLink } from 'react-plaid-link';
 
 const PLAID_LINK_TOKEN_STORAGE_KEY = 'spendfellow:plaid-link-token';
 const PLAID_LINK_ENVIRONMENT_STORAGE_KEY = 'spendfellow:plaid-link-environment';
 type PlaidEnvironment = 'sandbox' | 'development' | 'production';
-
-interface PlaidLinkButtonProps {
-  defaultEnvironment: PlaidEnvironment;
-}
 
 interface PlaidLinkSessionProps {
   receivedRedirectUri?: string;
@@ -160,11 +166,12 @@ function PlaidLinkSession({
   return null;
 }
 
-export default function PlaidLinkButton({ defaultEnvironment }: PlaidLinkButtonProps) {
+export default function PlaidLinkButton() {
   const router = useRouter();
   const [linkToken, setLinkToken] = useState<string | null>(null);
   const [receivedRedirectUri, setReceivedRedirectUri] = useState<string | undefined>(undefined);
-  const [selectedEnvironment, setSelectedEnvironment] = useState<PlaidEnvironment>(defaultEnvironment);
+  const [selectedEnvironment, setSelectedEnvironment] = useState<PlaidEnvironment>('production');
+  const [environmentDialogOpen, setEnvironmentDialogOpen] = useState(false);
   const [isLoadingToken, setIsLoadingToken] = useState(false);
   const [isLinkOpen, setIsLinkOpen] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
@@ -260,10 +267,12 @@ export default function PlaidLinkButton({ defaultEnvironment }: PlaidLinkButtonP
     [router, selectedEnvironment]
   );
 
-  const handleConnect = () => {
+  const startLinkForEnvironment = (environment: PlaidEnvironment) => {
     closeLinkSession();
     setLinkToken(null);
-    void loadLinkToken(selectedEnvironment);
+    setSelectedEnvironment(environment);
+    setEnvironmentDialogOpen(false);
+    void loadLinkToken(environment);
   };
 
   const isBusy = isLoadingToken || isSaving || isLinkOpen;
@@ -281,29 +290,45 @@ export default function PlaidLinkButton({ defaultEnvironment }: PlaidLinkButtonP
           onSuccess={onSuccess}
         />
       ) : null}
-      <ToggleButtonGroup
-        exclusive
-        size="small"
-        value={selectedEnvironment}
-        disabled={isBusy}
-        onChange={(_, nextEnvironment: PlaidEnvironment | null) => {
-          if (nextEnvironment) {
-            setSelectedEnvironment(nextEnvironment);
-          }
-        }}
-        aria-label="Plaid environment"
-      >
-        <ToggleButton value="sandbox">Sandbox</ToggleButton>
-        <ToggleButton value="production">Production</ToggleButton>
-      </ToggleButtonGroup>
       <Button
         variant="contained"
         startIcon={isLoadingToken || isSaving ? <CircularProgress color="inherit" size={18} /> : <AddIcon />}
         disabled={isBusy}
-        onClick={handleConnect}
+        onClick={() => setEnvironmentDialogOpen(true)}
       >
-        {isLinkOpen ? 'Connecting...' : `Connect ${selectedEnvironment} account`}
+        {isLinkOpen ? 'Connecting...' : 'Connect account'}
       </Button>
+      <Dialog open={environmentDialogOpen} onClose={() => (isBusy ? undefined : setEnvironmentDialogOpen(false))} fullWidth maxWidth="xs">
+        <DialogTitle>Connect account</DialogTitle>
+        <DialogContent>
+          <Stack spacing={1.5} sx={{ pt: 1 }}>
+            <Typography color="text.secondary">
+              Choose whether to connect a test institution or a real financial institution.
+            </Typography>
+            <Button
+              variant="outlined"
+              disabled={isBusy}
+              onClick={() => startLinkForEnvironment('sandbox')}
+              sx={{ justifyContent: 'flex-start', py: 1.25 }}
+            >
+              Sandbox
+            </Button>
+            <Button
+              variant="contained"
+              disabled={isBusy}
+              onClick={() => startLinkForEnvironment('production')}
+              sx={{ justifyContent: 'flex-start', py: 1.25 }}
+            >
+              Production
+            </Button>
+          </Stack>
+        </DialogContent>
+        <DialogActions>
+          <Button disabled={isBusy} onClick={() => setEnvironmentDialogOpen(false)}>
+            Cancel
+          </Button>
+        </DialogActions>
+      </Dialog>
       {error ? <Alert severity="error">{error}</Alert> : null}
     </Stack>
   );

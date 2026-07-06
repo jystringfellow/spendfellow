@@ -1,9 +1,9 @@
 import type { Metadata } from 'next';
+import { cookies } from 'next/headers';
 import { AppRouterCacheProvider } from '@mui/material-nextjs/v14-appRouter';
-import { ThemeProvider } from '@mui/material/styles';
-import CssBaseline from '@mui/material/CssBaseline';
 import { Box } from '@mui/material';
-import theme from './theme';
+import type { AppColorMode } from '@/app/theme';
+import AppThemeProvider from '@/components/layout/AppThemeProvider';
 import Navigation from '@/components/layout/Navigation';
 
 export const metadata: Metadata = {
@@ -20,19 +20,21 @@ export default function RootLayout({
 }: {
   children: React.ReactNode;
 }) {
+  const storedMode = cookies().get('spendfellow-color-mode')?.value;
+  const initialMode: AppColorMode = storedMode === 'light' || storedMode === 'dark' ? storedMode : 'dark';
+
   return (
     <html lang="en">
       <body>
         <AppRouterCacheProvider>
-          <ThemeProvider theme={theme}>
-            <CssBaseline />
+          <AppThemeProvider initialMode={initialMode}>
             <Box sx={{ display: 'flex', flexDirection: 'column', minHeight: '100vh' }}>
               <Navigation />
               <Box component="main" sx={{ flexGrow: 1, bgcolor: 'background.default', py: 3 }}>
                 {children}
               </Box>
             </Box>
-          </ThemeProvider>
+          </AppThemeProvider>
         </AppRouterCacheProvider>
       </body>
     </html>
