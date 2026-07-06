@@ -17,11 +17,13 @@ import {
   Tooltip,
   Typography,
 } from '@mui/material';
+import { getAccountBalanceCategory } from '@/lib/accountBalanceCategories';
 import { getCurrentHousehold } from '@/lib/households';
 import { formatCurrency } from '@/lib/money';
 import { createServerSupabaseClient } from '@/lib/supabaseServer';
 import type {
   Account,
+  AccountBalanceSnapshot,
   BudgetActualLine,
   Category,
   MonthlySpending,
@@ -55,6 +57,12 @@ interface CategorySection {
   headerColor: string;
   role: 'expense' | 'income' | 'savings';
   categories: Category[];
+}
+
+interface BalanceSummary {
+  key: 'checking' | 'savings' | 'ccDebt' | 'investments';
+  label: string;
+  balanceCents: number;
 }
 
 const TAG_FONT_COLOR_RULES = [
@@ -102,6 +110,10 @@ function getMonthDateRange(year: number, month: number): { startDate: string; en
 
 function getActualCents(spendingByCategoryMonth: Map<string, number>, categoryId: string, month: number): number {
   return spendingByCategoryMonth.get(`${categoryId}:${month}`) ?? 0;
+}
+
+function getDisplayActualCents(cents: number): number {
+  return Math.abs(cents);
 }
 
 function getYearRowTotal(spendingByCategoryMonth: Map<string, number>, categoryId: string): number {
@@ -205,7 +217,7 @@ function formatSheetAmount(cents: number, role: CategorySection['role'] = 'expen
     return formatSheetExpense(cents);
   }
 
-  return formatCurrency(cents);
+  return formatCurrency(Math.abs(cents));
 }
 
 function formatSheetTotal(cents: number): string {
@@ -222,7 +234,8 @@ function getCategoryMonthTotal(spendingByCategoryMonth: Map<string, number>, cat
 
 function getSectionMonthTotal(section: CategorySection, spendingByCategoryMonth: Map<string, number>, month: number): number {
   return section.categories.reduce(
-    (total, category) => total + getCategoryMonthTotal(spendingByCategoryMonth, category, month),
+    (total, category) =>
+      total + getDisplayActualCents(getCategoryMonthTotal(spendingByCategoryMonth, category, month)),
     0
   );
 }
@@ -239,7 +252,7 @@ function getMonthlySectionTotal(section: CategorySection, monthlyLinesByCategory
     (total, category) =>
       total +
       (monthlyLinesByCategoryId.get(category.id) ?? []).reduce(
-        (categoryTotal, line) => categoryTotal + line.amount_cents,
+        (categoryTotal, line) => categoryTotal + getDisplayActualCents(line.amount_cents),
         0
       ),
     0
@@ -292,6 +305,73 @@ function getCellBorderSx() {
   };
 }
 
+function getMonthStartDate(year: number, month: number): string {
+  return `${year}-${String(month).padStart(2, '0')}-01`;
+}
+
+function getBalanceCents(account: Account, snapshotByAccountId: Map<string, AccountBalanceSnapshot>): number {
+  return snapshotByAccountId.get(account.id)?.current_balance_cents ?? account.current_balance_cents ?? 0;
+}
+
+function getBalanceSnapshotDistance(snapshot: AccountBalanceSnapshot, targetTime: number): number {
+  return Math.abs(new Date(snapshot.recorded_at).getTime() - targetTime);
+}
+
+function getClosestBalanceSnapshots(
+  snapshots: AccountBalanceSnapshot[],
+  targetDate: string
+): Map<string, AccountBalanceSnapshot> {
+  const targetTime = new Date(`${targetDate}T00:00:00.000Z`).getTime();
+  const closestByAccountId = new Map<string, AccountBalanceSnapshot>();
+
+  snapshots.forEach((snapshot) => {
+    const current = closestByAccountId.get(snapshot.account_id);
+    if (!current || getBalanceSnapshotDistance(snapshot, targetTime) < getBalanceSnapshotDistance(current, targetTime)) {
+      closestByAccountId.set(snapshot.account_id, snapshot);
+    }
+  });
+
+  return closestByAccountId;
+}
+
+function sumAccountBalances(
+  accounts: Account[],
+  snapshotByAccountId: Map<string, AccountBalanceSnapshot>,
+  category: BalanceSummary['key'],
+  sign: 'asset' | 'debt' = 'asset'
+): number {
+  const total = accounts
+    .filter((account) => account.is_active && getAccountBalanceCategory(account) === category)
+    .reduce((sum, account) => sum + Math.abs(getBalanceCents(account, snapshotByAccountId)), 0);
+
+  return sign === 'debt' ? -total : total;
+}
+
+function getBalanceSummaries(accounts: Account[], snapshotByAccountId: Map<string, AccountBalanceSnapshot>): BalanceSummary[] {
+  return [
+    {
+      key: 'checking',
+      label: 'Checking',
+      balanceCents: sumAccountBalances(accounts, snapshotByAccountId, 'checking'),
+    },
+    {
+      key: 'savings',
+      label: 'Savings',
+      balanceCents: sumAccountBalances(accounts, snapshotByAccountId, 'savings'),
+    },
+    {
+      key: 'ccDebt',
+      label: 'CC Debt',
+      balanceCents: sumAccountBalances(accounts, snapshotByAccountId, 'ccDebt', 'debt'),
+    },
+    {
+      key: 'investments',
+      label: 'Investments',
+      balanceCents: sumAccountBalances(accounts, snapshotByAccountId, 'investments'),
+    },
+  ];
+}
+
 export default async function BudgetsPage({ searchParams }: BudgetsPageProps) {
   const selectedYear = getSelectedYear(searchParams?.year);
   const selectedSheet = getSelectedSheet(searchParams?.sheet);
@@ -307,7 +387,13 @@ export default async function BudgetsPage({ searchParams }: BudgetsPageProps) {
   }
 
   const household = await getCurrentHousehold(supabase);
-  const [{ data: categoryRows }, { data: spendingRows }, { data: monthlyActualRows }, { data: accountRows }] = household
+  const [
+    { data: categoryRows },
+    { data: spendingRows },
+    { data: monthlyActualRows },
+    { data: accountRows },
+    { data: balanceSnapshotRows },
+  ] = household
     ? await Promise.all([
         supabase
           .from('categories')
@@ -333,19 +419,25 @@ export default async function BudgetsPage({ searchParams }: BudgetsPageProps) {
           .select('*')
           .eq('household_id', household.id)
           .eq('is_active', true)
-          .order('name', { ascending: true })
-          .limit(4),
+          .order('name', { ascending: true }),
+        supabase
+          .from('account_balance_snapshots')
+          .select('*')
+          .eq('household_id', household.id)
+          .order('recorded_at', { ascending: false })
+          .limit(2000),
       ])
-    : [{ data: [] }, { data: [] }, { data: [] }, { data: [] }];
+    : [{ data: [] }, { data: [] }, { data: [] }, { data: [] }, { data: [] }];
 
   const categories = (categoryRows ?? []) as Category[];
   const accountSummaries = (accountRows ?? []) as Account[];
-  const balanceSummaryAccounts = accountSummaries.slice(0, 4);
-  const balanceSummaryTotalCents = accountSummaries.reduce(
-    (total, account) => total + (account.current_balance_cents ?? 0),
-    0
+  const balanceSnapshotByAccountId = getClosestBalanceSnapshots(
+    (balanceSnapshotRows ?? []) as AccountBalanceSnapshot[],
+    getMonthStartDate(selectedYear, selectedMonth)
   );
-  const balanceSummaryCellCount = balanceSummaryAccounts.length + (balanceSummaryAccounts.length > 0 ? 1 : 0);
+  const balanceSummaries = getBalanceSummaries(accountSummaries, balanceSnapshotByAccountId);
+  const balanceSummaryTotalCents = balanceSummaries.reduce((total, summary) => total + summary.balanceCents, 0);
+  const balanceSummaryCellCount = balanceSummaries.length + 1;
   const spending = (spendingRows ?? []) as MonthlySpending[];
   const sections = getCategorySections(categories);
   const visibleCategories = sections.flatMap((section) => section.categories);
@@ -510,6 +602,11 @@ export default async function BudgetsPage({ searchParams }: BudgetsPageProps) {
   );
   const monthlyCashFlowCents = monthlyIncomeCents - monthlyExpenseCents;
   const monthlySavingsRate = monthlyIncomeCents === 0 ? null : monthlySavingsCents / monthlyIncomeCents;
+  const liquidBalanceCents =
+    (balanceSummaries.find((summary) => summary.key === 'checking')?.balanceCents ?? 0) +
+    (balanceSummaries.find((summary) => summary.key === 'savings')?.balanceCents ?? 0) +
+    (balanceSummaries.find((summary) => summary.key === 'ccDebt')?.balanceCents ?? 0);
+  const bigWantsCapacityCents = liquidBalanceCents - needsBudgetCents * 12;
 
   return (
     <Container maxWidth={false} disableGutters sx={{ bgcolor: '#f8fafd', color: '#202124', minHeight: '100vh', pb: 8 }}>
@@ -756,46 +853,38 @@ export default async function BudgetsPage({ searchParams }: BudgetsPageProps) {
             <Table size="small" sx={{ minWidth: 1420, tableLayout: 'fixed', borderCollapse: 'collapse' }}>
               <TableBody>
                 <TableRow>
-                  {balanceSummaryAccounts.map((account) => (
-                    <TableCell key={account.id} sx={{ ...getCellBorderSx(), width: 112, bgcolor: '#a9c7c9', fontWeight: 700 }}>
-                      {account.name}
+                  {balanceSummaries.map((summary) => (
+                    <TableCell key={summary.key} sx={{ ...getCellBorderSx(), width: 112, bgcolor: '#a9c7c9', fontWeight: 700 }}>
+                      {summary.label}
                     </TableCell>
                   ))}
-                  {balanceSummaryAccounts.length > 0 ? (
-                    <TableCell sx={{ ...getCellBorderSx(), width: 112, bgcolor: '#d9d9d9', fontWeight: 700 }}>
-                      Total
-                    </TableCell>
-                  ) : null}
+                  <TableCell sx={{ ...getCellBorderSx(), width: 112, bgcolor: '#d9d9d9', fontWeight: 700 }}>Total</TableCell>
                   <TableCell
                     colSpan={Math.max(1, visibleCategories.length + 1 - balanceSummaryCellCount)}
                     sx={{ ...getCellBorderSx(), bgcolor: '#444', borderColor: '#444' }}
                   />
                 </TableRow>
                 <TableRow>
-                  {balanceSummaryAccounts.map((account) => (
-                    <TableCell key={account.id} sx={{ ...getCellBorderSx(), bgcolor: '#f3f3f3' }}>
-                      {account.official_name ?? account.subtype ?? ''}
+                  {balanceSummaries.map((summary) => (
+                    <TableCell key={summary.key} sx={{ ...getCellBorderSx(), bgcolor: '#f3f3f3' }}>
+                      {summary.key === 'ccDebt' ? 'Credit cards' : summary.key === 'investments' ? 'Investment accounts' : 'Bank accounts'}
                     </TableCell>
                   ))}
-                  {balanceSummaryAccounts.length > 0 ? (
-                    <TableCell sx={{ ...getCellBorderSx(), bgcolor: '#f3f3f3' }} />
-                  ) : null}
+                  <TableCell sx={{ ...getCellBorderSx(), bgcolor: '#f3f3f3' }} />
                   <TableCell
                     colSpan={Math.max(1, visibleCategories.length + 1 - balanceSummaryCellCount)}
                     sx={{ ...getCellBorderSx(), bgcolor: '#444', borderColor: '#444' }}
                   />
                 </TableRow>
                 <TableRow>
-                  {balanceSummaryAccounts.map((account) => (
-                    <TableCell key={account.id} align="right" sx={{ ...getCellBorderSx(), bgcolor: '#f3f3f3' }}>
-                      {formatSheetTotal(account.current_balance_cents ?? 0)}
+                  {balanceSummaries.map((summary) => (
+                    <TableCell key={summary.key} align="right" sx={{ ...getCellBorderSx(), bgcolor: '#f3f3f3' }}>
+                      {formatSheetTotal(summary.balanceCents)}
                     </TableCell>
                   ))}
-                  {balanceSummaryAccounts.length > 0 ? (
-                    <TableCell align="right" sx={{ ...getCellBorderSx(), bgcolor: '#d9d9d9', fontWeight: 700 }}>
-                      {formatSheetTotal(balanceSummaryTotalCents)}
-                    </TableCell>
-                  ) : null}
+                  <TableCell align="right" sx={{ ...getCellBorderSx(), bgcolor: '#d9d9d9', fontWeight: 700 }}>
+                    {formatSheetTotal(balanceSummaryTotalCents)}
+                  </TableCell>
                   <TableCell
                     colSpan={Math.max(1, visibleCategories.length + 1 - balanceSummaryCellCount)}
                     sx={{ ...getCellBorderSx(), bgcolor: '#444', borderColor: '#444' }}
@@ -837,11 +926,21 @@ export default async function BudgetsPage({ searchParams }: BudgetsPageProps) {
                 <TableRow>
                   {sections.map((section) => (
                     <Fragment key={`${section.id}:budgets`}>
-                      {section.categories.map((category) => (
-                        <TableCell key={category.id} align="right" sx={{ ...getCellBorderSx(), bgcolor: '#d9ead3' }}>
-                          {section.role === 'expense' ? formatCurrency(category.default_monthly_budget_cents) : null}
+                      {section.id === bigWantsSummarySection?.id ? (
+                        <TableCell
+                          align="center"
+                          colSpan={section.categories.length}
+                          sx={{ ...getCellBorderSx(), bgcolor: '#d9d9d9', fontWeight: 700 }}
+                        >
+                          {formatCurrency(bigWantsCapacityCents)}
                         </TableCell>
-                      ))}
+                      ) : (
+                        section.categories.map((category) => (
+                          <TableCell key={category.id} align="right" sx={{ ...getCellBorderSx(), bgcolor: '#d9d9d9' }}>
+                            {section.role === 'expense' ? formatCurrency(category.default_monthly_budget_cents) : null}
+                          </TableCell>
+                        ))
+                      )}
                       {section.id === needsSection?.id ? (
                         <TableCell align="right" sx={{ ...getCellBorderSx(), bgcolor: '#d9d9d9', fontWeight: 700 }}>
                           {formatCurrency(needsBudgetCents)}
@@ -863,7 +962,7 @@ export default async function BudgetsPage({ searchParams }: BudgetsPageProps) {
                               align="right"
                               sx={{
                                 ...getCellBorderSx(),
-                                bgcolor: line ? '#f4cccc' : '#fff',
+                                bgcolor: line ? (section.role === 'expense' ? '#f4cccc' : '#d9ead3') : '#fff',
                                 color: line ? getLineFontColor(line) : '#000',
                               }}
                             >
@@ -891,11 +990,15 @@ export default async function BudgetsPage({ searchParams }: BudgetsPageProps) {
                     <Fragment key={`${section.id}:totals`}>
                       {section.categories.map((category) => {
                         const total = (monthlyLinesByCategoryId.get(category.id) ?? []).reduce(
-                          (categoryTotal, line) => categoryTotal + line.amount_cents,
+                          (categoryTotal, line) => categoryTotal + getDisplayActualCents(line.amount_cents),
                           0
                         );
                         return (
-                          <TableCell key={category.id} align="right" sx={{ ...getCellBorderSx(), bgcolor: '#f4cccc' }}>
+                          <TableCell
+                            key={category.id}
+                            align="right"
+                            sx={{ ...getCellBorderSx(), bgcolor: section.role === 'expense' ? '#f4cccc' : '#d9ead3' }}
+                          >
                             {formatSheetAmount(total, section.role)}
                           </TableCell>
                         );
@@ -913,7 +1016,7 @@ export default async function BudgetsPage({ searchParams }: BudgetsPageProps) {
                     <Fragment key={`${section.id}:remaining`}>
                       {section.categories.map((category) => {
                         const total = (monthlyLinesByCategoryId.get(category.id) ?? []).reduce(
-                          (categoryTotal, line) => categoryTotal + line.amount_cents,
+                          (categoryTotal, line) => categoryTotal + getDisplayActualCents(line.amount_cents),
                           0
                         );
                         const remaining = category.default_monthly_budget_cents - total;
@@ -932,7 +1035,15 @@ export default async function BudgetsPage({ searchParams }: BudgetsPageProps) {
                             align="right"
                             sx={{
                               ...getCellBorderSx(),
-                              bgcolor: section.role === 'expense' && remaining < 0 ? '#f4cccc' : '#d9ead3',
+                              bgcolor:
+                                section.role === 'expense'
+                                  ? remaining < 0
+                                    ? '#f4cccc'
+                                    : '#d9ead3'
+                                  : calculatedValue
+                                    ? '#d9ead3'
+                                    : '#444',
+                              borderColor: section.role !== 'expense' && !calculatedValue ? '#444' : '#000',
                             }}
                           >
                             {section.role === 'expense' ? formatCurrency(remaining) : calculatedValue}

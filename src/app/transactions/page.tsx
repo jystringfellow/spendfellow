@@ -11,7 +11,6 @@ import {
   Typography,
 } from '@mui/material';
 import Link from 'next/link';
-import SyncTransactionsButton from '@/components/transactions/SyncTransactionsButton';
 import CategorizationModeButton from '@/components/transactions/CategorizationModeButton';
 import TransactionsTable, { AmazonTransactionMatch, EditableTransactionRow } from '@/components/transactions/TransactionsTable';
 import { getCurrentHousehold } from '@/lib/households';
@@ -336,7 +335,7 @@ export default async function TransactionsPage({ searchParams }: TransactionsPag
               Transactions
             </Typography>
             <Typography variant="body1" color="text.secondary">
-              Sync Plaid transactions and review uncategorized spend before it rolls into budget views.
+              Review uncategorized spend before it rolls into budget views.
             </Typography>
           </Box>
           {household ? (
@@ -346,7 +345,6 @@ export default async function TransactionsPage({ searchParams }: TransactionsPag
                 categories={categories}
                 tags={tags}
               />
-              <SyncTransactionsButton />
             </Stack>
           ) : null}
         </Stack>

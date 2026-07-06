@@ -11,7 +11,6 @@ import {
   DialogActions,
   DialogContent,
   DialogTitle,
-  IconButton,
   Menu,
   MenuItem,
   Stack,
@@ -134,13 +133,30 @@ export default function SyncTransactionsButton({
 
   return (
     <Stack spacing={1.5} alignItems="flex-start">
-      <ButtonGroup variant={variant} size={size} color={isSuccess ? 'success' : 'primary'} disabled={isSyncing}>
+      <ButtonGroup
+        variant={variant}
+        size={size}
+        color={isSuccess ? 'success' : 'primary'}
+        disabled={isSyncing}
+        sx={size === 'small' ? { width: 178, height: 32 } : undefined}
+      >
         <Button
           startIcon={isSyncing ? <CircularProgress color="inherit" size={18} /> : message ? <CheckIcon /> : <SyncIcon />}
           aria-disabled={isSuccess}
           onClick={() => void handleSync('latest')}
           sx={{
-            minWidth: size === 'small' ? 100 : 190,
+            minWidth: size === 'small' ? 0 : 190,
+            ...(size === 'small'
+              ? {
+                  flex: 1,
+                  fontSize: '0.75rem',
+                  px: 1,
+                  whiteSpace: 'nowrap',
+                  '& .MuiButton-startIcon': {
+                    mr: 0.75,
+                  },
+                }
+              : {}),
             ...(isSuccess
               ? {
                   pointerEvents: 'none',
@@ -150,15 +166,21 @@ export default function SyncTransactionsButton({
         >
           {isSyncing ? 'Syncing...' : message ?? label}
         </Button>
-        <IconButton
-          color="inherit"
+        <Button
           disabled={isInteractionDisabled}
           aria-label="Sync options"
           onClick={(event) => setMenuAnchorEl(event.currentTarget)}
-          sx={{ borderRadius: 0, width: 44 }}
+          sx={{
+            minWidth: size === 'small' ? 32 : 44,
+            px: 0,
+            borderColor: 'primary.main',
+            '&:hover, &.Mui-focusVisible': {
+              borderColor: 'primary.light',
+            },
+          }}
         >
-          <ArrowDropDownIcon />
-        </IconButton>
+          <ArrowDropDownIcon fontSize="small" />
+        </Button>
       </ButtonGroup>
       <Menu anchorEl={menuAnchorEl} open={Boolean(menuAnchorEl)} onClose={() => setMenuAnchorEl(null)}>
         <MenuItem

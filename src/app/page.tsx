@@ -15,9 +15,9 @@ export default function Home() {
         <Box
           sx={{
             mx: 'auto',
-            mb: 3,
+            mb: 4,
             position: 'relative',
-            width: 'min(720px, 100%)',
+            width: 'min(960px, 100%)',
             aspectRatio: '3 / 1',
           }}
         >
@@ -26,7 +26,7 @@ export default function Home() {
             alt="Spendfellow"
             fill
             priority
-            sizes="(max-width: 900px) 100vw, 720px"
+            sizes="(max-width: 900px) 100vw, 960px"
             style={{ objectFit: 'contain' }}
           />
         </Box>
@@ -106,9 +106,9 @@ export default function Home() {
           sx={{
             p: 3,
             mt: 4,
-            bgcolor: '#050712',
-            color: 'white',
-            borderColor: 'rgba(98, 243, 63, 0.25)',
+            bgcolor: 'background.paper',
+            color: 'text.primary',
+            borderColor: 'primary.main',
           }}
         >
           <Typography variant="h6" gutterBottom>
