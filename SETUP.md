@@ -172,17 +172,58 @@ Open your browser and navigate to http://localhost:3000 to see the application.
    - **Secure email change**: Recommended
 4. In **Authentication** settings, disable public/self-service signups if your project exposes that option. Spendfellow does not expose an in-app signup flow, but Supabase should also reject public signups at the auth layer.
 
-### 8.2 Create Invited Users
+### 8.2 Configure Auth URLs
 
-Spendfellow is invite-only. Users should be added from Supabase, not from the app.
+In **Authentication** → **URL Configuration**, configure:
 
-1. Go to **Authentication** → **Users**
-2. Use **Invite user** or **Add user**
-3. Enter the allowed user's email address
-4. Send the invite or set an initial password
-5. Have the user sign in at `/login`
+```text
+Site URL: https://your-app-domain.example
+Redirect URLs:
+  https://your-app-domain.example/auth/callback
+  https://your-app-domain.example/auth/set-password
+```
 
-After the second household member signs in, add them to your existing household from the database/admin flow before expecting them to see shared data.
+For local development, also allow:
+
+```text
+http://localhost:3000/auth/callback
+http://localhost:3000/auth/set-password
+```
+
+The Site URL should match `NEXT_PUBLIC_APP_URL`. Supabase validates the per-invitation redirect before making it available to the email template.
+
+### 8.3 Configure Server-Side Email Links
+
+Spendfellow verifies email tokens on the server so the authenticated session can be stored in cookies. In **Authentication** → **Email Templates**, update both the **Invite user** and **Magic link** templates.
+
+Use this link in the **Invite user** template:
+
+```html
+<a href="{{ .SiteURL }}/auth/confirm?token_hash={{ .TokenHash }}&type=invite&next={{ .RedirectTo }}">
+  Accept household invitation
+</a>
+```
+
+Use this link in the **Magic link** template:
+
+```html
+<a href="{{ .SiteURL }}/auth/confirm?token_hash={{ .TokenHash }}&type=email&next={{ .RedirectTo }}">
+  Sign in
+</a>
+```
+
+Keep any surrounding email copy or branding you want. The `token_hash`, `type`, and `next` query parameters must remain intact.
+
+### 8.4 Invite Household Members
+
+Spendfellow is invite-only. After the owner has created their household:
+
+1. Sign in and open **Settings**.
+2. Find **Household Access**.
+3. Enter the new member's email and choose **Invite member**.
+4. The recipient opens the Supabase email, verifies their address, chooses a password, and is added to the household automatically.
+
+Keep public/self-service signups disabled. The server uses the Supabase secret key to create invited Auth users, and database acceptance requires the authenticated email to match a pending invitation. Reinviting an existing Auth user sends a magic link through the same onboarding flow.
 
 ## Step 9: Test Plaid Integration (Sandbox)
 

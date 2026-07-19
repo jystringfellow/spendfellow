@@ -7,13 +7,14 @@ import { createBrowserSupabaseClient } from '@/lib/supabase';
 
 interface LoginFormProps {
   supabaseConfigured: boolean;
+  initialError?: string | null;
 }
 
-export default function LoginForm({ supabaseConfigured }: LoginFormProps) {
+export default function LoginForm({ supabaseConfigured, initialError = null }: LoginFormProps) {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [message, setMessage] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(initialError);
   const [isSubmitting, setIsSubmitting] = useState(false);
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {

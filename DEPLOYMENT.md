@@ -163,24 +163,42 @@ Each deployment should use its own Supabase project.
 2. Run the migrations in `supabase/migrations/` in filename order.
 3. Configure Supabase Auth.
 4. Disable public/self-service signups if available.
-5. Add invited users from Supabase Auth, not from the Spendfellow app.
+5. Invite household members from the **Household Access** panel in Spendfellow settings.
 
 For Supabase Auth, configure these URLs:
 
 ```text
 Site URL: https://your-app-domain.example
 Redirect URL: https://your-app-domain.example/auth/callback
+Redirect URL: https://your-app-domain.example/auth/set-password
 ```
 
 For local development, also allow:
 
 ```text
 http://localhost:3000/auth/callback
+http://localhost:3000/auth/set-password
 ```
 
-Spendfellow has no public signup screen and sends magic links with `shouldCreateUser: false`, but Supabase Auth should still be configured to reject public/self-service signups where your project settings allow it.
+In **Authentication** → **Email Templates**, configure the **Invite user** link as:
 
-After the first user signs in, use the app settings seed action or your admin SQL flow to create the household bootstrap data. Add additional users to the existing household from an admin/database flow before expecting them to see shared household data.
+```html
+<a href="{{ .SiteURL }}/auth/confirm?token_hash={{ .TokenHash }}&type=invite&next={{ .RedirectTo }}">
+  Accept household invitation
+</a>
+```
+
+Configure the **Magic link** template as:
+
+```html
+<a href="{{ .SiteURL }}/auth/confirm?token_hash={{ .TokenHash }}&type=email&next={{ .RedirectTo }}">
+  Sign in
+</a>
+```
+
+Spendfellow has no public signup screen and sends ordinary magic links with `shouldCreateUser: false`. Household invitations are created by an authenticated owner through a server-only Supabase admin client. Supabase Auth should still reject public/self-service signups where the project settings allow it.
+
+After the first user signs in, use the app settings seed action to create the household bootstrap data. Additional users are attached to that household automatically after accepting their email-bound invitation and choosing a password.
 
 ## Plaid Setup
 
