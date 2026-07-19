@@ -18,6 +18,7 @@ import {
 import { redirect } from 'next/navigation';
 import Link from 'next/link';
 import { formatCurrency } from '@/lib/money';
+import { resolveCategoryLayout } from '@/lib/categoryLayouts';
 import {
   clampMonth,
   monthOptions,
@@ -42,6 +43,7 @@ import type {
   RecurringValuePeriod,
   Tag,
   Account,
+  CategoryLayoutPeriod,
 } from '@/types/database';
 import {
   CategoryDialogButton,
@@ -195,6 +197,7 @@ export async function BudgetSettingsContent({ searchParams, embedded = false, tr
 
   const [
     { data: categoryData, error: categoriesError },
+    { data: categoryLayoutData, error: categoryLayoutsError },
     { data: recurringData, error: recurringError },
     { data: dependencyData, error: dependenciesError },
     { data: categoryPeriodData, error: categoryPeriodsError },
@@ -208,6 +211,10 @@ export async function BudgetSettingsContent({ searchParams, embedded = false, tr
           .select('*')
           .eq('household_id', household.id)
           .order('sort_order', { ascending: true }),
+        supabase
+          .from('category_layout_periods')
+          .select('*')
+          .eq('household_id', household.id),
         supabase
           .from('recurring_values')
           .select('*')
@@ -236,10 +243,15 @@ export async function BudgetSettingsContent({ searchParams, embedded = false, tr
         { data: [], error: null },
         { data: [], error: null },
         { data: [], error: null },
+        { data: [], error: null },
       ];
 
   if (categoriesError) {
     throw new Error(categoriesError.message);
+  }
+
+  if (categoryLayoutsError) {
+    throw new Error(categoryLayoutsError.message);
   }
 
   if (recurringError) {
@@ -267,17 +279,28 @@ export async function BudgetSettingsContent({ searchParams, embedded = false, tr
   }
 
   const categories = (categoryData ?? []) as Category[];
+  const categoryLayouts = (categoryLayoutData ?? []) as CategoryLayoutPeriod[];
+  const effectiveCategoryLayouts = resolveCategoryLayout(categories, categoryLayouts, selectedYear, selectedMonth).filter(
+    (layout) => layout.isVisible
+  );
+  const effectiveCategories = effectiveCategoryLayouts
+    .map((layout) => ({
+      ...layout.category,
+      parent_category_id: layout.parentCategoryId,
+      sort_order: layout.sortOrder,
+    }))
+    .sort((first, second) => (first.sort_order ?? 0) - (second.sort_order ?? 0));
   const recurringValues = (recurringData ?? []) as RecurringValue[];
   const dependencies = (dependencyData ?? []) as RecurringValueDependency[];
   const categoryPeriods = (categoryPeriodData ?? []) as CategoryBudgetPeriod[];
   const recurringPeriods = (recurringPeriodData ?? []) as RecurringValuePeriod[];
   const tags = (tagData ?? []) as Tag[];
   const accounts = (accountData ?? []) as Account[];
-  const groups = categories.filter((category) => category.is_group);
+  const groups = effectiveCategories.filter((category) => category.is_group);
   const budgetGroups = groups.filter(isBudgetGroup);
   const transferGroups = groups.filter((group) => !isBudgetGroup(group));
-  const childCategories = categories.filter((category) => !category.is_group);
-  const totalBudgetCents = getTotalBudgetCents(budgetGroups, categories, categoryPeriods, selectedYear, selectedMonth);
+  const childCategories = effectiveCategories.filter((category) => !category.is_group);
+  const totalBudgetCents = getTotalBudgetCents(budgetGroups, effectiveCategories, categoryPeriods, selectedYear, selectedMonth);
   const hiddenBalanceAccounts = accounts.filter((account) => getAccountBalanceCategory(account) === 'hidden');
   const visibleBalanceCategories = ACCOUNT_BALANCE_CATEGORY_OPTIONS.map((option) => ({
     ...option,
@@ -289,7 +312,7 @@ export async function BudgetSettingsContent({ searchParams, embedded = false, tr
     recurringPeriods,
     selectedYear,
     selectedMonth,
-    categories
+    effectiveCategories
   );
   const recurringInputRows = recurringRows.filter((value) => value.kind === 'fixed');
   const recurringFormulaRows = recurringRows.filter((value) => value.kind === 'formula');
@@ -316,8 +339,17 @@ export async function BudgetSettingsContent({ searchParams, embedded = false, tr
             size="small"
             defaultValue={selectedYear}
             sx={{ width: 120 }}
+            InputLabelProps={{ shrink: true }}
           />
-          <TextField select name="month" label="Month" size="small" defaultValue={selectedMonth} sx={{ width: 120 }}>
+          <TextField
+            select
+            name="month"
+            label="Month"
+            size="small"
+            defaultValue={selectedMonth}
+            sx={{ width: 120 }}
+            InputLabelProps={{ shrink: true }}
+          >
             {monthOptions.map((month) => (
               <MenuItem key={month.value} value={month.value}>
                 {month.label}
@@ -366,7 +398,7 @@ export async function BudgetSettingsContent({ searchParams, embedded = false, tr
                     {budgetGroups.map((group) => {
                       const groupTotalCents = getGroupTotalCents(
                         group,
-                        categories,
+                        effectiveCategories,
                         categoryPeriods,
                         selectedYear,
                         selectedMonth
@@ -508,7 +540,7 @@ export async function BudgetSettingsContent({ searchParams, embedded = false, tr
                       );
                       const groupTotalCents = getGroupTotalCents(
                         group,
-                        categories,
+                        effectiveCategories,
                         categoryPeriods,
                         selectedYear,
                         selectedMonth

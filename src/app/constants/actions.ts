@@ -153,6 +153,18 @@ export async function updateCategorySettings(formData: FormData) {
     throw new Error('Category group not found');
   }
 
+  const { data: currentCategory, error: currentCategoryError } = await supabase
+    .from('categories')
+    .select('sort_order')
+    .eq('id', categoryId)
+    .eq('household_id', householdId)
+    .eq('is_group', false)
+    .single();
+
+  if (currentCategoryError) {
+    throw new Error(currentCategoryError.message);
+  }
+
   const { error: updateError } = await supabase
     .from('categories')
     .update({
@@ -184,6 +196,23 @@ export async function updateCategorySettings(formData: FormData) {
 
   if (periodError) {
     throw new Error(periodError.message);
+  }
+
+  const { error: layoutPeriodError } = await supabase.from('category_layout_periods').upsert(
+    {
+      household_id: householdId,
+      category_id: categoryId,
+      parent_category_id: parentCategoryId,
+      start_year: year,
+      start_month: startMonth,
+      sort_order: Number(currentCategory?.sort_order ?? 0),
+      is_visible: true,
+    },
+    { onConflict: 'household_id,category_id,start_year,start_month' }
+  );
+
+  if (layoutPeriodError) {
+    throw new Error(layoutPeriodError.message);
   }
 
   revalidateSettingsPaths();
@@ -572,6 +601,20 @@ export async function createCategory(formData: FormData) {
 
   if (periodError) {
     throw new Error(periodError.message);
+  }
+
+  const { error: layoutPeriodError } = await supabase.from('category_layout_periods').insert({
+    household_id: householdId,
+    category_id: category.id,
+    parent_category_id: parentCategoryId,
+    start_year: year,
+    start_month: startMonth,
+    sort_order: nextSortOrder,
+    is_visible: true,
+  });
+
+  if (layoutPeriodError) {
+    throw new Error(layoutPeriodError.message);
   }
 
   revalidateSettingsPaths();

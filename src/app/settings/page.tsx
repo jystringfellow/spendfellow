@@ -2,6 +2,8 @@ import { redirect } from 'next/navigation';
 import { Box, Container, Paper, Stack, Typography } from '@mui/material';
 import { BudgetSettingsContent } from '@/components/settings/BudgetSettingsContent';
 import AmazonSyncPanel from '@/components/settings/AmazonSyncPanel';
+import GoogleSheetsBudgetImportPanel from '@/components/settings/GoogleSheetsBudgetImportPanel';
+import HouseholdMembersPanel from '@/components/settings/HouseholdMembersPanel';
 import { getCurrentHousehold } from '@/lib/households';
 import { createServerSupabaseClient } from '@/lib/supabaseServer';
 
@@ -33,23 +35,29 @@ export default async function SettingsPage({ searchParams }: SettingsPageProps) 
           embedded
           searchParams={searchParams}
           trailingContent={
-            <Paper sx={{ p: 3 }}>
-              <Stack spacing={2}>
-                <Box>
-                  <Typography variant="h6">Import Tools</Typography>
-                  <Typography color="text.secondary">
-                    Optional helpers for importing transactions from external sources.
-                  </Typography>
-                </Box>
-                {!household ? (
-                  <Typography color="text.secondary">
-                    Create a household before connecting private import sources.
-                  </Typography>
-                ) : (
-                  <AmazonSyncPanel />
-                )}
-              </Stack>
-            </Paper>
+            <Stack spacing={3}>
+              <HouseholdMembersPanel />
+              <Paper sx={{ p: 3 }}>
+                <Stack spacing={2}>
+                  <Box>
+                    <Typography variant="h6">Import Tools</Typography>
+                    <Typography color="text.secondary">
+                      Optional helpers for importing transactions from external sources.
+                    </Typography>
+                  </Box>
+                  {!household ? (
+                    <Typography color="text.secondary">
+                      Create a household before connecting private import sources.
+                    </Typography>
+                  ) : (
+                    <>
+                      <GoogleSheetsBudgetImportPanel />
+                      <AmazonSyncPanel />
+                    </>
+                  )}
+                </Stack>
+              </Paper>
+            </Stack>
           }
         />
       </Box>

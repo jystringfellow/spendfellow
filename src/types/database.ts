@@ -22,6 +22,19 @@ export interface HouseholdMember {
   created_at: string;
 }
 
+export interface HouseholdInvitation {
+  id: string;
+  household_id: string;
+  email: string;
+  invited_by: string;
+  role: 'member';
+  status: 'pending' | 'accepted' | 'revoked';
+  expires_at: string;
+  accepted_at: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
 export interface Account {
   id: string;
   user_id: string;
@@ -172,6 +185,22 @@ export interface Category {
   updated_at: string;
 }
 
+export interface CategoryLayoutPeriod {
+  id: string;
+  household_id: string;
+  category_id: string;
+  parent_category_id: string | null;
+  start_year: number;
+  start_month: number;
+  end_year: number | null;
+  end_month: number | null;
+  sort_order: number;
+  is_visible: boolean;
+  notes: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
 export interface Budget {
   id: string;
   user_id: string;
@@ -237,11 +266,12 @@ export interface TransactionSplitTag {
 }
 
 export interface BudgetActualLine {
-  transaction_id: string;
+  transaction_id: string | null;
   transaction_split_id: string | null;
+  imported_budget_line_id: string | null;
   user_id: string;
   household_id: string | null;
-  account_id: string;
+  account_id: string | null;
   category_id: string | null;
   date: string;
   amount_cents: number;
@@ -249,6 +279,28 @@ export interface BudgetActualLine {
   notes: string | null;
   plaid_environment: 'sandbox' | 'development' | 'production' | null;
   is_split: boolean;
+  source_type: 'transaction' | 'transaction_split' | 'imported_budget_line';
+  description: string;
+  merchant_name: string | null;
+}
+
+export interface ImportedBudgetLine {
+  id: string;
+  household_id: string;
+  user_id: string;
+  category_id: string | null;
+  source: string;
+  source_sheet: string;
+  source_cell: string;
+  year: number;
+  month: number;
+  date: string;
+  amount_cents: number;
+  description: string;
+  notes: string | null;
+  raw_comment: string | null;
+  created_at: string;
+  updated_at: string;
 }
 
 export interface RecurringValue {

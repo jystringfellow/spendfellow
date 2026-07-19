@@ -19,6 +19,8 @@
     "@supabase/ssr": "^0.12.0",
     "@supabase/supabase-js": "^2.108.2",
     "date-fns": "^3.3.1",
+    "fast-xml-parser": "^5.9.3",
+    "jszip": "^3.10.1",
     "next": "^14.1.0",
     "plaid": "^19.0.0",
     "react": "^18.2.0",

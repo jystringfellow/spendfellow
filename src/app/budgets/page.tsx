@@ -11,13 +11,14 @@ import {
   TableBody,
   TableCell,
   TableContainer,
-  TableFooter,
   TableHead,
   TableRow,
   Tooltip,
   Typography,
 } from '@mui/material';
 import { getAccountBalanceCategory } from '@/lib/accountBalanceCategories';
+import { resolveCategoryLayout } from '@/lib/categoryLayouts';
+import { resolveCategoryBudgetAmount } from '@/lib/constantPeriods';
 import { getCurrentHousehold } from '@/lib/households';
 import { formatCurrency } from '@/lib/money';
 import { createServerSupabaseClient } from '@/lib/supabaseServer';
@@ -26,9 +27,10 @@ import type {
   AccountBalanceSnapshot,
   BudgetActualLine,
   Category,
+  CategoryBudgetPeriod,
+  CategoryLayoutPeriod,
   MonthlySpending,
   Tag,
-  Transaction,
   TransactionSplitTag,
   TransactionTag,
 } from '@/types/database';
@@ -56,7 +58,12 @@ interface CategorySection {
   color: string;
   headerColor: string;
   role: 'expense' | 'income' | 'savings';
+  targetPercent: number | null;
   categories: Category[];
+}
+
+interface OrderedCategorySection extends CategorySection {
+  order: number;
 }
 
 interface BalanceSummary {
@@ -71,6 +78,53 @@ const TAG_FONT_COLOR_RULES = [
   { name: 'HSA', color: '#ff00ff' },
   { name: 'Cash', color: '#38761d' },
 ];
+
+const GROUP_PRESENTATION = [
+  { key: 'needs', name: 'Needs', color: '#c9daf8', headerColor: '#9fc5e8', order: 10 },
+  { key: 'wants', name: 'Wants', color: '#fce5cd', headerColor: '#f9cb9c', order: 20 },
+  { key: 'bigwants', name: 'Big Wants', color: '#e6b8af', headerColor: '#dd7e6b', order: 30 },
+  { key: 'income', name: 'Income', color: '#d9d2e9', headerColor: '#b4a7d6', order: 40 },
+  { key: 'savings', name: 'Savings', color: '#fff2cc', headerColor: '#ffe599', order: 50 },
+];
+
+function normalizeGroupKey(sectionOrCategory: Pick<Category, 'name' | 'group_key'>): string {
+  const groupKey = sectionOrCategory.group_key?.toLowerCase();
+  const name = sectionOrCategory.name.toLowerCase();
+
+  if (groupKey === 'bigwants' || (name.includes('big') && name.includes('want'))) {
+    return 'bigwants';
+  }
+
+  if (groupKey === 'needs' || name.includes('need')) {
+    return 'needs';
+  }
+
+  if (groupKey === 'wants' || name.includes('want')) {
+    return 'wants';
+  }
+
+  if (groupKey === 'income' || name.includes('income')) {
+    return 'income';
+  }
+
+  if (groupKey === 'savings' || name.includes('savings')) {
+    return 'savings';
+  }
+
+  return groupKey ?? name;
+}
+
+function getGroupPresentation(group: Category, fallbackIndex: number) {
+  return (
+    GROUP_PRESENTATION.find((presentation) => presentation.key === normalizeGroupKey(group)) ?? {
+      key: normalizeGroupKey(group),
+      name: group.name,
+      color: '#eeeeee',
+      headerColor: '#d9d9d9',
+      order: 1000 + fallbackIndex,
+    }
+  );
+}
 
 function getSelectedYear(yearParam: string | undefined): number {
   const parsedYear = Number(yearParam);
@@ -123,29 +177,43 @@ function getYearRowTotal(spendingByCategoryMonth: Map<string, number>, categoryI
   );
 }
 
-function getCategorySections(categories: Category[]): CategorySection[] {
+function getCategorySections(categories: Category[], layoutPeriods: CategoryLayoutPeriod[], year: number, month: number): CategorySection[] {
   const groups = categories.filter((category) => category.is_group);
   const childCategories = categories.filter((category) => !category.is_group);
-  const palette = [
-    { color: '#c9daf8', headerColor: '#9fc5e8' },
-    { color: '#fce5cd', headerColor: '#f9cb9c' },
-    { color: '#ead1dc', headerColor: '#d5a6bd' },
-    { color: '#d9ead3', headerColor: '#b6d7a8' },
-    { color: '#fff2cc', headerColor: '#ffe599' },
-    { color: '#d9d2e9', headerColor: '#b4a7d6' },
-  ];
+  const effectiveLayouts = resolveCategoryLayout(categories, layoutPeriods, year, month).filter((layout) => layout.isVisible);
+  const layoutByCategoryId = new Map(effectiveLayouts.map((layout) => [layout.category.id, layout]));
 
-  const sections = groups
-    .map((group, index) => ({
-      id: group.id,
-      name: group.name,
-      ...palette[index % palette.length],
-      role: getSectionRole(group),
-      categories: childCategories.filter((category) => category.parent_category_id === group.id),
-    }))
+  const sections: OrderedCategorySection[] = groups
+    .map((group, index) => {
+      const presentation = getGroupPresentation(group, index);
+
+      return {
+        id: group.id,
+        name: presentation.name,
+        color: presentation.color,
+        headerColor: presentation.headerColor,
+        role: getSectionRole(group),
+        targetPercent: group.target_percent == null ? null : Number(group.target_percent),
+        order: presentation.order,
+        categories: childCategories
+          .filter((category) => layoutByCategoryId.get(category.id)?.parentCategoryId === group.id)
+          .sort(
+            (firstCategory, secondCategory) =>
+              (layoutByCategoryId.get(firstCategory.id)?.sortOrder ?? firstCategory.sort_order ?? 0) -
+              (layoutByCategoryId.get(secondCategory.id)?.sortOrder ?? secondCategory.sort_order ?? 0)
+          ),
+      };
+    })
     .filter((section) => section.categories.length > 0);
+  sections.sort((firstSection, secondSection) => firstSection.order - secondSection.order);
 
-  const orphanCategories = childCategories.filter((category) => !category.parent_category_id);
+  const orphanCategories = childCategories
+    .filter((category) => layoutByCategoryId.has(category.id) && !layoutByCategoryId.get(category.id)?.parentCategoryId)
+    .sort(
+      (firstCategory, secondCategory) =>
+        (layoutByCategoryId.get(firstCategory.id)?.sortOrder ?? firstCategory.sort_order ?? 0) -
+        (layoutByCategoryId.get(secondCategory.id)?.sortOrder ?? secondCategory.sort_order ?? 0)
+    );
   if (orphanCategories.length > 0) {
     sections.push({
       id: 'other',
@@ -153,11 +221,25 @@ function getCategorySections(categories: Category[]): CategorySection[] {
       color: '#eeeeee',
       headerColor: '#d9d9d9',
       role: 'expense',
+      targetPercent: null,
+      order: 9999,
       categories: orphanCategories,
     });
   }
 
-  return sections;
+  return sections.map(({ order: _order, ...section }) => section);
+}
+
+function getSheetCategoryName(category: Category, section: CategorySection): string {
+  if (section.role === 'income' && category.name.toLowerCase() === 'income transfers') {
+    return 'Transfers';
+  }
+
+  if (section.role === 'savings' && category.name.toLowerCase() === 'savings transfers') {
+    return 'Transfers';
+  }
+
+  return category.name;
 }
 
 function getSectionRole(sectionOrCategory: Pick<Category, 'name' | 'group_key' | 'is_income'>): CategorySection['role'] {
@@ -185,7 +267,7 @@ function getMonthlyLineTooltip(line: MonthlyDetailLine): string {
   const tags = line.tags.length ? `Tags: ${line.tags.map((tag) => tag.name).join(', ')}` : null;
   const base = [title, line.date, tags].filter(Boolean).join('\n');
 
-  return note ? `${base}\n${note}` : base;
+  return note && note !== title ? `${base}\n${note}` : base;
 }
 
 function getLineFontColor(line: MonthlyDetailLine): string {
@@ -232,6 +314,20 @@ function getCategoryMonthTotal(spendingByCategoryMonth: Map<string, number>, cat
   return getActualCents(spendingByCategoryMonth, category.id, month);
 }
 
+function getCategoryBudgetCents(category: Category, periods: CategoryBudgetPeriod[], year: number, month: number): number {
+  return resolveCategoryBudgetAmount(
+    category.id,
+    category.default_monthly_budget_cents,
+    periods,
+    year,
+    month
+  ).amount_cents;
+}
+
+function getExpenseVarianceCents(actualCents: number, budgetCents: number): number {
+  return budgetCents - getDisplayActualCents(actualCents);
+}
+
 function getSectionMonthTotal(section: CategorySection, spendingByCategoryMonth: Map<string, number>, month: number): number {
   return section.categories.reduce(
     (total, category) =>
@@ -240,9 +336,13 @@ function getSectionMonthTotal(section: CategorySection, spendingByCategoryMonth:
   );
 }
 
-function getSectionYearTotal(section: CategorySection, spendingByCategoryMonth: Map<string, number>): number {
-  return MONTHS.reduce(
-    (total, _monthName, monthIndex) => total + getSectionMonthTotal(section, spendingByCategoryMonth, monthIndex + 1),
+function getSectionMonthSignedTotal(
+  section: CategorySection,
+  spendingByCategoryMonth: Map<string, number>,
+  month: number
+): number {
+  return section.categories.reduce(
+    (total, category) => total + getCategoryMonthTotal(spendingByCategoryMonth, category, month),
     0
   );
 }
@@ -273,7 +373,7 @@ function getNonZeroAverage(values: number[]): number {
   return Math.round(nonZeroValues.reduce((sum, value) => sum + value, 0) / Math.max(1, nonZeroValues.length));
 }
 
-function getAverageIncomePercentage(amountTotals: number[], incomeTotals: number[]): string {
+function getAverageIncomePercentage(amountTotals: number[], incomeTotals: number[], sign = 1): string {
   const rates = amountTotals
     .map((amountTotal, monthIndex) => {
       const incomeTotal = incomeTotals[monthIndex] ?? 0;
@@ -285,11 +385,35 @@ function getAverageIncomePercentage(amountTotals: number[], incomeTotals: number
     return 'No entries.';
   }
 
-  return `${((rates.reduce((sum, rate) => sum + rate, 0) / rates.length) * 100).toFixed(2)}%`;
+  return `${((rates.reduce((sum, rate) => sum + rate, 0) / rates.length) * sign * 100).toFixed(2)}%`;
 }
 
-function formatIncomePercentage(amountCents: number, incomeCents: number): string {
-  return incomeCents ? `${((amountCents / incomeCents) * 100).toFixed(2)}%` : 'No entries.';
+function formatIncomePercentage(
+  amountCents: number,
+  incomeCents: number,
+  sign = 1,
+  noIncomeValue = 'No entries.'
+): string {
+  return incomeCents ? `${((amountCents / incomeCents) * sign * 100).toFixed(2)}%` : noIncomeValue;
+}
+
+function getAverageExpenseVarianceCents(actuals: number[], budgets: number[]): number {
+  const populatedVariances = actuals.flatMap((actualCents, monthIndex) =>
+    actualCents === 0 ? [] : [getExpenseVarianceCents(actualCents, budgets[monthIndex] ?? 0)]
+  );
+
+  return populatedVariances.length
+    ? Math.round(populatedVariances.reduce((total, variance) => total + variance, 0) / populatedVariances.length)
+    : 0;
+}
+
+function getSummarySectionLabel(section: CategorySection): string {
+  if (section.targetPercent == null) {
+    return section.name;
+  }
+
+  const target = Number.isInteger(section.targetPercent) ? section.targetPercent.toFixed(0) : section.targetPercent.toFixed(1);
+  return `${section.name} (${target}%)`;
 }
 
 function getCellBorderSx() {
@@ -334,6 +458,18 @@ function getClosestBalanceSnapshots(
   return closestByAccountId;
 }
 
+function getMonthBalanceSnapshots(
+  snapshots: AccountBalanceSnapshot[],
+  year: number,
+  month: number
+): Map<string, AccountBalanceSnapshot> {
+  const monthPrefix = `${year}-${String(month).padStart(2, '0')}-`;
+  return getClosestBalanceSnapshots(
+    snapshots.filter((snapshot) => snapshot.recorded_at.startsWith(monthPrefix)),
+    getMonthStartDate(year, month)
+  );
+}
+
 function sumAccountBalances(
   accounts: Account[],
   snapshotByAccountId: Map<string, AccountBalanceSnapshot>,
@@ -372,6 +508,40 @@ function getBalanceSummaries(accounts: Account[], snapshotByAccountId: Map<strin
   ];
 }
 
+function getYearBalanceRows(
+  accounts: Account[],
+  snapshots: AccountBalanceSnapshot[],
+  year: number
+): Array<{ label: string; values: number[] }> {
+  const monthlyValues = MONTHS.map((_monthName, monthIndex) => {
+    const snapshotByAccountId = getMonthBalanceSnapshots(snapshots, year, monthIndex + 1);
+    const sumSnapshots = (category: BalanceSummary['key'], sign: 'asset' | 'debt' = 'asset') => {
+      const total = accounts
+        .filter((account) => account.is_active && getAccountBalanceCategory(account) === category)
+        .reduce((sum, account) => {
+          const snapshot = snapshotByAccountId.get(account.id);
+          return snapshot ? sum + Math.abs(snapshot.current_balance_cents ?? 0) : sum;
+        }, 0);
+
+      return sign === 'debt' ? -total : total;
+    };
+    const cash = sumSnapshots('checking') + sumSnapshots('savings');
+    const ccDebt = sumSnapshots('ccDebt', 'debt');
+    const liquid = cash + ccDebt;
+    const investments = sumSnapshots('investments');
+
+    return { cash, ccDebt, liquid, investments, overall: liquid + investments };
+  });
+
+  return [
+    { label: 'Cash Balance', values: monthlyValues.map((value) => value.cash) },
+    { label: 'CC Debt', values: monthlyValues.map((value) => value.ccDebt) },
+    { label: 'Liquid', values: monthlyValues.map((value) => value.liquid) },
+    { label: 'Investment Balance', values: monthlyValues.map((value) => value.investments) },
+    { label: 'Overall Balance', values: monthlyValues.map((value) => value.overall) },
+  ];
+}
+
 export default async function BudgetsPage({ searchParams }: BudgetsPageProps) {
   const selectedYear = getSelectedYear(searchParams?.year);
   const selectedSheet = getSelectedSheet(searchParams?.sheet);
@@ -389,6 +559,8 @@ export default async function BudgetsPage({ searchParams }: BudgetsPageProps) {
   const household = await getCurrentHousehold(supabase);
   const [
     { data: categoryRows },
+    { data: categoryLayoutRows },
+    { data: categoryBudgetPeriodRows },
     { data: spendingRows },
     { data: monthlyActualRows },
     { data: accountRows },
@@ -401,6 +573,15 @@ export default async function BudgetsPage({ searchParams }: BudgetsPageProps) {
           .eq('household_id', household.id)
           .order('sort_order', { ascending: true })
           .order('name', { ascending: true }),
+        supabase
+          .from('category_layout_periods')
+          .select('*')
+          .eq('household_id', household.id),
+        supabase
+          .from('category_budget_periods')
+          .select('*')
+          .eq('household_id', household.id)
+          .eq('year', selectedYear),
         supabase
           .from('monthly_spending_by_category')
           .select('*')
@@ -427,19 +608,22 @@ export default async function BudgetsPage({ searchParams }: BudgetsPageProps) {
           .order('recorded_at', { ascending: false })
           .limit(2000),
       ])
-    : [{ data: [] }, { data: [] }, { data: [] }, { data: [] }, { data: [] }];
+    : [{ data: [] }, { data: [] }, { data: [] }, { data: [] }, { data: [] }, { data: [] }, { data: [] }];
 
   const categories = (categoryRows ?? []) as Category[];
+  const categoryLayouts = (categoryLayoutRows ?? []) as CategoryLayoutPeriod[];
+  const categoryBudgetPeriods = (categoryBudgetPeriodRows ?? []) as CategoryBudgetPeriod[];
   const accountSummaries = (accountRows ?? []) as Account[];
+  const balanceSnapshots = (balanceSnapshotRows ?? []) as AccountBalanceSnapshot[];
   const balanceSnapshotByAccountId = getClosestBalanceSnapshots(
-    (balanceSnapshotRows ?? []) as AccountBalanceSnapshot[],
+    balanceSnapshots,
     getMonthStartDate(selectedYear, selectedMonth)
   );
   const balanceSummaries = getBalanceSummaries(accountSummaries, balanceSnapshotByAccountId);
   const balanceSummaryTotalCents = balanceSummaries.reduce((total, summary) => total + summary.balanceCents, 0);
   const balanceSummaryCellCount = balanceSummaries.length + 1;
   const spending = (spendingRows ?? []) as MonthlySpending[];
-  const sections = getCategorySections(categories);
+  const sections = getCategorySections(categories, categoryLayouts, selectedYear, selectedMonth);
   const visibleCategories = sections.flatMap((section) => section.categories);
   const expenseSections = sections.filter((section) => section.role === 'expense');
   const incomeSections = sections.filter((section) => section.role === 'income');
@@ -452,20 +636,8 @@ export default async function BudgetsPage({ searchParams }: BudgetsPageProps) {
   });
 
   const actualLines = ((monthlyActualRows ?? []) as BudgetActualLine[]).filter((line) => Boolean(line.category_id));
-  const transactionIds = Array.from(new Set(actualLines.map((line) => line.transaction_id)));
-  const { data: monthlyTransactionRows } =
-    household && transactionIds.length > 0
-      ? await supabase
-          .from('transactions')
-          .select('id, merchant_name, description')
-          .eq('household_id', household.id)
-          .in('id', transactionIds)
-      : { data: [] };
-  const transactionById = new Map(
-    ((monthlyTransactionRows ?? []) as Pick<Transaction, 'id' | 'merchant_name' | 'description'>[]).map((transaction) => [
-      transaction.id,
-      transaction,
-    ])
+  const transactionIds = Array.from(
+    new Set(actualLines.map((line) => line.transaction_id).filter((transactionId): transactionId is string => Boolean(transactionId)))
   );
   const monthlySplitIds = actualLines
     .map((line) => line.transaction_split_id)
@@ -510,14 +682,17 @@ export default async function BudgetsPage({ searchParams }: BudgetsPageProps) {
       return;
     }
 
-    const transaction = transactionById.get(line.transaction_id);
     const tags = line.transaction_split_id
-      ? tagsBySplitId.get(line.transaction_split_id) ?? tagsByTransactionId.get(line.transaction_id) ?? []
-      : tagsByTransactionId.get(line.transaction_id) ?? [];
+      ? tagsBySplitId.get(line.transaction_split_id) ??
+        (line.transaction_id ? tagsByTransactionId.get(line.transaction_id) : undefined) ??
+        []
+      : line.transaction_id
+        ? tagsByTransactionId.get(line.transaction_id) ?? []
+        : [];
     const detailLine: MonthlyDetailLine = {
       ...line,
-      description: transaction?.description ?? 'Transaction',
-      merchant_name: transaction?.merchant_name ?? null,
+      description: line.description,
+      merchant_name: line.merchant_name,
       tags,
     };
     monthlyLinesByCategoryId.set(line.category_id, [...(monthlyLinesByCategoryId.get(line.category_id) ?? []), detailLine]);
@@ -526,12 +701,6 @@ export default async function BudgetsPage({ searchParams }: BudgetsPageProps) {
   const monthlyRows = Math.max(
     MONTHLY_MIN_ROWS,
     ...visibleCategories.map((category) => monthlyLinesByCategoryId.get(category.id)?.length ?? 0)
-  );
-  const monthExpenseTotals = MONTHS.map((_monthName, monthIndex) =>
-    expenseCategories.reduce(
-      (total, category) => total + getActualCents(spendingByCategoryMonth, category.id, monthIndex + 1),
-      0
-    )
   );
   const incomeMonthTotals = MONTHS.map((_monthName, monthIndex) =>
     incomeSections.reduce(
@@ -555,28 +724,41 @@ export default async function BudgetsPage({ searchParams }: BudgetsPageProps) {
     wantsSummarySection ? getSectionMonthTotal(wantsSummarySection, spendingByCategoryMonth, monthIndex + 1) : 0
   );
   const bigWantsMonthTotals = MONTHS.map((_monthName, monthIndex) =>
-    bigWantsSummarySection ? getSectionMonthTotal(bigWantsSummarySection, spendingByCategoryMonth, monthIndex + 1) : 0
+    bigWantsSummarySection
+      ? getSectionMonthSignedTotal(bigWantsSummarySection, spendingByCategoryMonth, monthIndex + 1)
+      : 0
   );
   const totalSpentNonBigMonthTotals = MONTHS.map(
-    (_monthName, monthIndex) => needsMonthTotals[monthIndex] + wantsMonthTotals[monthIndex]
+    (_monthName, monthIndex) => -needsMonthTotals[monthIndex] - wantsMonthTotals[monthIndex]
   );
   const totalSpentMonthTotals = MONTHS.map(
-    (_monthName, monthIndex) => needsMonthTotals[monthIndex] + wantsMonthTotals[monthIndex] + bigWantsMonthTotals[monthIndex]
+    (_monthName, monthIndex) => totalSpentNonBigMonthTotals[monthIndex] + bigWantsMonthTotals[monthIndex]
   );
   const cashFlowNonBigMonthTotals = MONTHS.map(
-    (_monthName, monthIndex) => incomeMonthTotals[monthIndex] - totalSpentNonBigMonthTotals[monthIndex]
+    (_monthName, monthIndex) => incomeMonthTotals[monthIndex] + totalSpentNonBigMonthTotals[monthIndex]
   );
   const cashFlowMonthTotals = MONTHS.map(
-    (_monthName, monthIndex) => incomeMonthTotals[monthIndex] - totalSpentMonthTotals[monthIndex]
+    (_monthName, monthIndex) => incomeMonthTotals[monthIndex] + totalSpentMonthTotals[monthIndex]
   );
-  const grandTotal = monthExpenseTotals.reduce((total, monthTotal) => total + monthTotal, 0);
+  const summaryBalanceRows = getYearBalanceRows(accountSummaries, balanceSnapshots, selectedYear);
+  const summaryExpenseSections = expenseSections.filter((section) => section.categories.length > 0);
+  const wantsTotalsMonthTotals = MONTHS.map(
+    (_monthName, monthIndex) => -wantsMonthTotals[monthIndex] + bigWantsMonthTotals[monthIndex]
+  );
+  const wantsTargetPercent =
+    (wantsSummarySection?.targetPercent ?? 0) + (bigWantsSummarySection?.targetPercent ?? 0);
+  const incomeYearTotal = incomeMonthTotals.reduce((total, monthTotal) => total + monthTotal, 0);
+  const savingsYearTotal = savingsMonthTotals.reduce((total, monthTotal) => total + monthTotal, 0);
   const activeSheetLabel =
     selectedSheet === 'summary' ? 'Year Summary' : `${MONTHS[selectedMonth - 1]} ${selectedYear}`;
   const previousYear = selectedYear - 1;
   const nextYear = selectedYear + 1;
   const needsSection = needsSummarySection;
   const needsBudgetCents =
-    needsSection?.categories.reduce((total, category) => total + category.default_monthly_budget_cents, 0) ?? 0;
+    needsSection?.categories.reduce(
+      (total, category) => total + getCategoryBudgetCents(category, categoryBudgetPeriods, selectedYear, selectedMonth),
+      0
+    ) ?? 0;
   const needsSpentCents =
     needsSection?.categories.reduce(
       (total, category) =>
@@ -635,7 +817,7 @@ export default async function BudgetsPage({ searchParams }: BudgetsPageProps) {
       <Box sx={{ px: 5.5, pt: 1 }}>
         {selectedSheet === 'summary' ? (
           <TableContainer sx={{ overflowX: 'auto', bgcolor: '#fff' }}>
-            <Table size="small" sx={{ minWidth: 1420, tableLayout: 'fixed', borderCollapse: 'collapse' }}>
+            <Table size="small" sx={{ minWidth: 1710, tableLayout: 'fixed', borderCollapse: 'collapse' }}>
               <TableHead>
                 <TableRow>
                   <TableCell sx={{ ...getCellBorderSx(), width: 170, bgcolor: '#d9d9d9', fontWeight: 700 }} />
@@ -649,20 +831,45 @@ export default async function BudgetsPage({ searchParams }: BudgetsPageProps) {
                 </TableRow>
               </TableHead>
               <TableBody>
-                {sections.map((section) => {
+                <TableRow>
+                  <TableCell sx={{ ...getCellBorderSx(), bgcolor: '#a9c7c9', fontWeight: 700 }}>Balances</TableCell>
+                  {MONTHS.map((month) => (
+                    <TableCell key={`balances:${month}`} sx={{ ...getCellBorderSx(), bgcolor: '#a9c7c9' }} />
+                  ))}
+                  <TableCell sx={{ ...getCellBorderSx(), bgcolor: '#a9c7c9' }} />
+                  <TableCell sx={{ ...getCellBorderSx(), bgcolor: '#a9c7c9' }} />
+                </TableRow>
+                {summaryBalanceRows.map((row) => (
+                  <TableRow key={row.label}>
+                    <TableCell sx={{ ...getCellBorderSx(), bgcolor: '#d0e0e3' }}>{row.label}</TableCell>
+                    {row.values.map((value, monthIndex) => (
+                      <TableCell key={`${row.label}:${MONTHS[monthIndex]}`} align="right" sx={getCellBorderSx()}>
+                        {formatCurrency(value)}
+                      </TableCell>
+                    ))}
+                    <TableCell align="center" sx={{ ...getCellBorderSx(), fontWeight: 700 }}>---</TableCell>
+                    <TableCell align="right" sx={getCellBorderSx()}>
+                      {formatCurrency(getNonZeroAverage(row.values))}
+                    </TableCell>
+                  </TableRow>
+                ))}
+                {summaryExpenseSections.map((section) => {
+                  const isBigWants = section.id === bigWantsSummarySection?.id;
                   const sectionMonthTotals = MONTHS.map((_month, monthIndex) =>
-                    section.categories.reduce(
-                      (total, category) => total + getActualCents(spendingByCategoryMonth, category.id, monthIndex + 1),
-                      0
-                    )
+                    isBigWants
+                      ? getSectionMonthSignedTotal(section, spendingByCategoryMonth, monthIndex + 1)
+                      : getSectionMonthTotal(section, spendingByCategoryMonth, monthIndex + 1)
                   );
                   const sectionTotal = sectionMonthTotals.reduce((total, monthTotal) => total + monthTotal, 0);
+                  const formatSectionAmount = (amountCents: number) =>
+                    isBigWants ? formatCurrency(amountCents) : formatSheetAmount(amountCents, section.role);
+                  const sectionPercentageSign = isBigWants ? 1 : -1;
 
                   return (
                     <Fragment key={section.id}>
                       <TableRow>
                         <TableCell sx={{ ...getCellBorderSx(), bgcolor: section.headerColor, fontWeight: 700 }}>
-                          {section.name}
+                          {getSummarySectionLabel(section)}
                         </TableCell>
                         {sectionMonthTotals.map((monthTotal, monthIndex) => (
                           <TableCell
@@ -670,53 +877,90 @@ export default async function BudgetsPage({ searchParams }: BudgetsPageProps) {
                             align="right"
                             sx={{ ...getCellBorderSx(), bgcolor: section.headerColor }}
                           >
-                            {formatSheetAmount(monthTotal, section.role)}
+                            {formatSectionAmount(monthTotal)}
                           </TableCell>
                         ))}
                         <TableCell align="right" sx={{ ...getCellBorderSx(), bgcolor: section.headerColor, fontWeight: 700 }}>
-                          {formatSheetAmount(sectionTotal, section.role)}
+                          {formatSectionAmount(sectionTotal)}
                         </TableCell>
                         <TableCell align="right" sx={{ ...getCellBorderSx(), bgcolor: section.headerColor, fontWeight: 700 }}>
-                          {formatSheetAmount(getNonZeroAverage(sectionMonthTotals), section.role)}
+                          {formatSectionAmount(getNonZeroAverage(sectionMonthTotals))}
                         </TableCell>
                       </TableRow>
-                      {section.role === 'expense' ? (
-                        <TableRow>
-                          <TableCell sx={{ ...getCellBorderSx(), bgcolor: section.headerColor, fontWeight: 700 }}>
-                            {section.name} % of Income
-                          </TableCell>
-                          {sectionMonthTotals.map((monthTotal, monthIndex) => (
-                            <TableCell
-                              key={`${section.id}:income-percent:${monthIndex}`}
-                              align="right"
-                              sx={{ ...getCellBorderSx(), bgcolor: section.headerColor }}
-                            >
-                              {formatIncomePercentage(monthTotal, incomeMonthTotals[monthIndex] ?? 0)}
-                            </TableCell>
-                          ))}
-                          <TableCell align="right" sx={{ ...getCellBorderSx(), bgcolor: section.headerColor, fontWeight: 700 }}>
+                      <TableRow>
+                        <TableCell sx={{ ...getCellBorderSx(), bgcolor: section.headerColor }} />
+                        {sectionMonthTotals.map((monthTotal, monthIndex) => (
+                          <TableCell
+                            key={`${section.id}:income-percent:${monthIndex}`}
+                            align="right"
+                            sx={{ ...getCellBorderSx(), bgcolor: section.headerColor }}
+                          >
                             {formatIncomePercentage(
-                              sectionTotal,
-                              incomeMonthTotals.reduce((total, monthTotal) => total + monthTotal, 0)
+                              monthTotal,
+                              incomeMonthTotals[monthIndex] ?? 0,
+                              sectionPercentageSign,
+                              '0.00%'
                             )}
                           </TableCell>
-                          <TableCell align="right" sx={{ ...getCellBorderSx(), bgcolor: section.headerColor, fontWeight: 700 }}>
-                            {getAverageIncomePercentage(sectionMonthTotals, incomeMonthTotals)}
-                          </TableCell>
-                        </TableRow>
-                      ) : null}
-                      {section.categories.map((category) => {
+                        ))}
+                        <TableCell align="right" sx={{ ...getCellBorderSx(), bgcolor: section.headerColor }}>
+                          {formatIncomePercentage(sectionTotal, incomeYearTotal, sectionPercentageSign)}
+                        </TableCell>
+                        <TableCell align="right" sx={{ ...getCellBorderSx(), bgcolor: section.headerColor }}>
+                          {getAverageIncomePercentage(sectionMonthTotals, incomeMonthTotals, sectionPercentageSign)}
+                        </TableCell>
+                      </TableRow>
+                      {isBigWants ? section.categories.map((category) => {
                         const monthlyActuals = MONTHS.map((_month, monthIndex) =>
                           getActualCents(spendingByCategoryMonth, category.id, monthIndex + 1)
+                        );
+                        const rowTotal = monthlyActuals.reduce((total, actualCents) => total + actualCents, 0);
+                        const hasEntries = monthlyActuals.some((actualCents) => actualCents !== 0);
+
+                        return (
+                          <TableRow key={category.id}>
+                            <TableCell sx={{ ...getCellBorderSx(), bgcolor: section.color }}>
+                              {getSheetCategoryName(category, section)}
+                            </TableCell>
+                            {monthlyActuals.map((actualCents, monthIndex) => (
+                              <TableCell
+                                key={`${category.id}:${MONTHS[monthIndex]}`}
+                                align="right"
+                                sx={getCellBorderSx()}
+                              >
+                                {formatCurrency(actualCents)}
+                              </TableCell>
+                            ))}
+                            <TableCell align="right" sx={getCellBorderSx()}>
+                              {formatCurrency(rowTotal)}
+                            </TableCell>
+                            <TableCell align="right" sx={getCellBorderSx()}>
+                              {hasEntries ? formatCurrency(getNonZeroAverage(monthlyActuals)) : 'No entries.'}
+                            </TableCell>
+                          </TableRow>
+                        );
+                      }) : section.categories.map((category) => {
+                        const monthlyActuals = MONTHS.map((_month, monthIndex) =>
+                          getActualCents(spendingByCategoryMonth, category.id, monthIndex + 1)
+                        );
+                        const monthlyBudgets = MONTHS.map((_month, monthIndex) =>
+                          getCategoryBudgetCents(category, categoryBudgetPeriods, selectedYear, monthIndex + 1)
                         );
                         const rowTotal = getYearRowTotal(spendingByCategoryMonth, category.id);
                         return (
                           <TableRow key={category.id}>
-                            <TableCell sx={{ ...getCellBorderSx(), bgcolor: section.color }}>{category.name}</TableCell>
+                            <TableCell sx={{ ...getCellBorderSx(), bgcolor: section.color }}>
+                              {getSheetCategoryName(category, section)}
+                            </TableCell>
                             {MONTHS.map((month, monthIndex) => {
                               const actualCents = getActualCents(spendingByCategoryMonth, category.id, monthIndex + 1);
-                              const budgetCents = category.default_monthly_budget_cents;
-                              const varianceCents = budgetCents - actualCents;
+                              const budgetCents = getCategoryBudgetCents(
+                                category,
+                                categoryBudgetPeriods,
+                                selectedYear,
+                                monthIndex + 1
+                              );
+                              const varianceCents = getExpenseVarianceCents(actualCents, budgetCents);
                               return (
                                 <TableCell
                                   key={`${category.id}:${month}`}
@@ -736,55 +980,97 @@ export default async function BudgetsPage({ searchParams }: BudgetsPageProps) {
                             <TableCell align="right" sx={{ ...getCellBorderSx() }}>
                               {formatSheetAmount(rowTotal, section.role)}
                             </TableCell>
-                            <TableCell align="right" sx={{ ...getCellBorderSx(), whiteSpace: 'pre-line' }}>
-                              {section.role === 'expense'
-                                ? `${formatSheetExpense(getNonZeroAverage(monthlyActuals))}\n${formatSheetVariance(
-                                    Math.round(
-                                      monthlyActuals
-                                        .map((actualCents) => category.default_monthly_budget_cents - actualCents)
-                                        .reduce((total, varianceCents) => total + varianceCents, 0) / 12
-                                    )
-                                  )}`
-                                : formatSheetAmount(getNonZeroAverage(monthlyActuals), section.role)}
-                            </TableCell>
+                            {(() => {
+                              const averageActualCents = getNonZeroAverage(monthlyActuals);
+                              const averageVarianceCents = getAverageExpenseVarianceCents(monthlyActuals, monthlyBudgets);
+
+                              return (
+                                <TableCell
+                                  align="right"
+                                  sx={{
+                                    ...getCellBorderSx(),
+                                    bgcolor: section.role === 'expense' && averageVarianceCents < 0 ? '#f4cccc' : '#fff',
+                                    whiteSpace: 'pre-line',
+                                  }}
+                                >
+                                  {section.role === 'expense'
+                                    ? `${formatSheetExpense(averageActualCents)}\n${formatSheetVariance(averageVarianceCents)}`
+                                    : formatSheetAmount(averageActualCents, section.role)}
+                                </TableCell>
+                              );
+                            })()}
                           </TableRow>
                         );
                       })}
                     </Fragment>
                   );
                 })}
-              </TableBody>
-              <TableFooter>
+                {wantsSummarySection || bigWantsSummarySection ? (
+                  <Fragment>
+                    <TableRow>
+                      <TableCell sx={{ ...getCellBorderSx(), bgcolor: '#d5a6bd', fontWeight: 700 }}>
+                        Wants Totals{wantsTargetPercent ? ` (${wantsTargetPercent}%)` : ''}
+                      </TableCell>
+                      {wantsTotalsMonthTotals.map((monthTotal, monthIndex) => (
+                        <TableCell key={`wants-total:${MONTHS[monthIndex]}`} align="right" sx={{ ...getCellBorderSx(), bgcolor: '#d5a6bd' }}>
+                          {formatCurrency(monthTotal)}
+                        </TableCell>
+                      ))}
+                      <TableCell align="right" sx={{ ...getCellBorderSx(), bgcolor: '#d5a6bd' }}>
+                        {formatCurrency(wantsTotalsMonthTotals.reduce((total, value) => total + value, 0))}
+                      </TableCell>
+                      <TableCell align="right" sx={{ ...getCellBorderSx(), bgcolor: '#d5a6bd' }}>
+                        {formatCurrency(getNonZeroAverage(wantsTotalsMonthTotals))}
+                      </TableCell>
+                    </TableRow>
+                    <TableRow>
+                      <TableCell sx={{ ...getCellBorderSx(), bgcolor: '#d5a6bd' }} />
+                      {wantsTotalsMonthTotals.map((monthTotal, monthIndex) => (
+                        <TableCell key={`wants-total-percent:${MONTHS[monthIndex]}`} align="right" sx={{ ...getCellBorderSx(), bgcolor: '#d5a6bd' }}>
+                          {formatIncomePercentage(monthTotal, incomeMonthTotals[monthIndex] ?? 0)}
+                        </TableCell>
+                      ))}
+                      <TableCell align="right" sx={{ ...getCellBorderSx(), bgcolor: '#d5a6bd' }}>
+                        {formatIncomePercentage(
+                          wantsTotalsMonthTotals.reduce((total, value) => total + value, 0),
+                          incomeYearTotal,
+                          1
+                        )}
+                      </TableCell>
+                      <TableCell align="right" sx={{ ...getCellBorderSx(), bgcolor: '#d5a6bd' }}>
+                        {getAverageIncomePercentage(wantsTotalsMonthTotals, incomeMonthTotals)}
+                      </TableCell>
+                    </TableRow>
+                  </Fragment>
+                ) : null}
                 <TableRow>
-                  <TableCell sx={{ ...getCellBorderSx(), bgcolor: '#b6d7a8', fontWeight: 700 }}>Total Spent</TableCell>
-                  {monthExpenseTotals.map((monthTotal, monthIndex) => (
-                    <TableCell key={MONTHS[monthIndex]} align="right" sx={{ ...getCellBorderSx(), bgcolor: '#d9ead3' }}>
-                      {formatSheetExpense(monthTotal)}
-                    </TableCell>
+                  <TableCell sx={{ ...getCellBorderSx(), bgcolor: '#b4a7d6', fontWeight: 700 }}>
+                    {incomeSections[0]?.name ?? 'Income'}
+                  </TableCell>
+                  {MONTHS.map((month) => (
+                    <TableCell key={`income-header:${month}`} sx={{ ...getCellBorderSx(), bgcolor: '#d9d2e9' }} />
                   ))}
-                  <TableCell align="right" sx={{ ...getCellBorderSx(), bgcolor: '#d9ead3', fontWeight: 700 }}>
-                    {formatSheetExpense(grandTotal)}
-                  </TableCell>
-                  <TableCell align="right" sx={{ ...getCellBorderSx(), bgcolor: '#d9ead3', fontWeight: 700 }}>
-                    {formatSheetExpense(Math.round(grandTotal / 12))}
-                  </TableCell>
+                  <TableCell sx={{ ...getCellBorderSx(), bgcolor: '#d9d2e9' }} />
+                  <TableCell sx={{ ...getCellBorderSx(), bgcolor: '#d9d2e9' }} />
                 </TableRow>
                 <TableRow>
-                  <TableCell sx={{ ...getCellBorderSx(), bgcolor: '#d9d2e9', fontWeight: 700 }}>Income</TableCell>
+                  <TableCell sx={{ ...getCellBorderSx(), bgcolor: '#d9d2e9' }}>Transfers</TableCell>
                   {incomeMonthTotals.map((monthTotal, monthIndex) => (
-                    <TableCell key={`income:${MONTHS[monthIndex]}`} align="right" sx={{ ...getCellBorderSx(), bgcolor: '#d9d2e9' }}>
+                    <TableCell key={`income:${MONTHS[monthIndex]}`} align="right" sx={getCellBorderSx()}>
                       {formatCurrency(monthTotal)}
                     </TableCell>
                   ))}
-                  <TableCell align="right" sx={{ ...getCellBorderSx(), bgcolor: '#d9d2e9', fontWeight: 700 }}>
-                    {formatCurrency(incomeMonthTotals.reduce((total, monthTotal) => total + monthTotal, 0))}
+                  <TableCell align="right" sx={getCellBorderSx()}>
+                    {formatCurrency(incomeYearTotal)}
                   </TableCell>
-                  <TableCell align="right" sx={{ ...getCellBorderSx(), bgcolor: '#d9d2e9', fontWeight: 700 }}>
+                  <TableCell align="right" sx={getCellBorderSx()}>
                     {formatCurrency(getNonZeroAverage(incomeMonthTotals))}
                   </TableCell>
                 </TableRow>
                 <TableRow>
-                  <TableCell sx={{ ...getCellBorderSx(), bgcolor: '#fff2cc', fontWeight: 700 }}>Savings Rate</TableCell>
+                  <TableCell sx={{ ...getCellBorderSx(), bgcolor: '#ffe599', fontWeight: 700 }}>
+                    {savingsSections[0] ? getSummarySectionLabel(savingsSections[0]) : 'Savings'}
+                  </TableCell>
                   {savingsMonthTotals.map((monthTotal, monthIndex) => {
                     const incomeTotal = incomeMonthTotals[monthIndex] ?? 0;
                     return (
@@ -794,12 +1080,8 @@ export default async function BudgetsPage({ searchParams }: BudgetsPageProps) {
                     );
                   })}
                   <TableCell align="right" sx={{ ...getCellBorderSx(), bgcolor: '#fff2cc', fontWeight: 700 }}>
-                    {incomeMonthTotals.reduce((total, monthTotal) => total + monthTotal, 0)
-                      ? `${(
-                          (savingsMonthTotals.reduce((total, monthTotal) => total + monthTotal, 0) /
-                            incomeMonthTotals.reduce((total, monthTotal) => total + monthTotal, 0)) *
-                          100
-                        ).toFixed(2)}%`
+                    {incomeYearTotal
+                      ? `${((savingsYearTotal / incomeYearTotal) * 100).toFixed(2)}%`
                       : 'No entries.'}
                   </TableCell>
                   <TableCell align="right" sx={{ ...getCellBorderSx(), bgcolor: '#fff2cc', fontWeight: 700 }}>
@@ -807,23 +1089,31 @@ export default async function BudgetsPage({ searchParams }: BudgetsPageProps) {
                   </TableCell>
                 </TableRow>
                 <TableRow>
-                  <TableCell sx={{ ...getCellBorderSx(), bgcolor: '#fff2cc', fontWeight: 700 }}>Savings Transfers</TableCell>
+                  <TableCell sx={{ ...getCellBorderSx(), bgcolor: '#fff2cc' }}>Transfers</TableCell>
                   {savingsMonthTotals.map((monthTotal, monthIndex) => (
-                    <TableCell key={`savings:${MONTHS[monthIndex]}`} align="right" sx={{ ...getCellBorderSx(), bgcolor: '#fff2cc' }}>
+                    <TableCell key={`savings:${MONTHS[monthIndex]}`} align="right" sx={getCellBorderSx()}>
                       {formatCurrency(monthTotal)}
                     </TableCell>
                   ))}
-                  <TableCell align="right" sx={{ ...getCellBorderSx(), bgcolor: '#fff2cc', fontWeight: 700 }}>
-                    {formatCurrency(savingsMonthTotals.reduce((total, monthTotal) => total + monthTotal, 0))}
+                  <TableCell align="right" sx={getCellBorderSx()}>
+                    {formatCurrency(savingsYearTotal)}
                   </TableCell>
-                  <TableCell align="right" sx={{ ...getCellBorderSx(), bgcolor: '#fff2cc', fontWeight: 700 }}>
+                  <TableCell align="right" sx={getCellBorderSx()}>
                     {formatCurrency(getNonZeroAverage(savingsMonthTotals))}
                   </TableCell>
                 </TableRow>
+                <TableRow>
+                  <TableCell sx={{ ...getCellBorderSx(), bgcolor: '#93c47d', fontWeight: 700 }}>Money Numbers</TableCell>
+                  {MONTHS.map((month) => (
+                    <TableCell key={`money-header:${month}`} sx={{ ...getCellBorderSx(), bgcolor: '#d9ead3' }} />
+                  ))}
+                  <TableCell sx={{ ...getCellBorderSx(), bgcolor: '#d9ead3' }} />
+                  <TableCell sx={{ ...getCellBorderSx(), bgcolor: '#d9ead3' }} />
+                </TableRow>
                 {[
-                  { label: 'Total Spent (Non-Big)', values: totalSpentNonBigMonthTotals },
+                  { label: 'Total Spent (Non-Big)', values: totalSpentNonBigMonthTotals, signed: true },
                   { label: 'Cash Flow (Non-Big)', values: cashFlowNonBigMonthTotals, cashFlow: true },
-                  { label: 'Total Spent', values: totalSpentMonthTotals },
+                  { label: 'Total Spent', values: totalSpentMonthTotals, signed: true },
                   { label: 'Cash Flow', values: cashFlowMonthTotals, cashFlow: true },
                 ].map((row) => {
                   const total = row.values.reduce((sum, value) => sum + value, 0);
@@ -832,20 +1122,20 @@ export default async function BudgetsPage({ searchParams }: BudgetsPageProps) {
                     <TableRow key={row.label}>
                       <TableCell sx={{ ...getCellBorderSx(), bgcolor: '#b6d7a8', fontWeight: 700 }}>{row.label}</TableCell>
                       {row.values.map((value, monthIndex) => (
-                        <TableCell key={`${row.label}:${MONTHS[monthIndex]}`} align="right" sx={{ ...getCellBorderSx(), bgcolor: '#d9ead3' }}>
-                          {row.cashFlow ? formatCurrency(value) : formatSheetExpense(value)}
+                        <TableCell key={`${row.label}:${MONTHS[monthIndex]}`} align="right" sx={getCellBorderSx()}>
+                          {row.cashFlow || row.signed ? formatCurrency(value) : formatSheetExpense(value)}
                         </TableCell>
                       ))}
-                      <TableCell align="right" sx={{ ...getCellBorderSx(), bgcolor: '#d9ead3', fontWeight: 700 }}>
-                        {row.cashFlow ? formatCurrency(total) : formatSheetExpense(total)}
+                      <TableCell align="right" sx={getCellBorderSx()}>
+                        {row.cashFlow || row.signed ? formatCurrency(total) : formatSheetExpense(total)}
                       </TableCell>
-                      <TableCell align="right" sx={{ ...getCellBorderSx(), bgcolor: '#d9ead3', fontWeight: 700 }}>
-                        {row.cashFlow ? formatCurrency(average) : formatSheetExpense(average)}
+                      <TableCell align="right" sx={getCellBorderSx()}>
+                        {row.cashFlow || row.signed ? formatCurrency(average) : formatSheetExpense(average)}
                       </TableCell>
                     </TableRow>
                   );
                 })}
-              </TableFooter>
+              </TableBody>
             </Table>
           </TableContainer>
         ) : (
@@ -917,7 +1207,7 @@ export default async function BudgetsPage({ searchParams }: BudgetsPageProps) {
                     <Fragment key={`${section.id}:categories`}>
                       {section.categories.map((category) => (
                         <TableCell key={category.id} sx={{ ...getCellBorderSx(), bgcolor: section.color }}>
-                          {category.name}
+                          {getSheetCategoryName(category, section)}
                         </TableCell>
                       ))}
                     </Fragment>
@@ -937,7 +1227,9 @@ export default async function BudgetsPage({ searchParams }: BudgetsPageProps) {
                       ) : (
                         section.categories.map((category) => (
                           <TableCell key={category.id} align="right" sx={{ ...getCellBorderSx(), bgcolor: '#d9d9d9' }}>
-                            {section.role === 'expense' ? formatCurrency(category.default_monthly_budget_cents) : null}
+                            {section.role === 'expense'
+                              ? formatCurrency(getCategoryBudgetCents(category, categoryBudgetPeriods, selectedYear, selectedMonth))
+                              : null}
                           </TableCell>
                         ))
                       )}
@@ -1019,7 +1311,8 @@ export default async function BudgetsPage({ searchParams }: BudgetsPageProps) {
                           (categoryTotal, line) => categoryTotal + getDisplayActualCents(line.amount_cents),
                           0
                         );
-                        const remaining = category.default_monthly_budget_cents - total;
+                        const remaining =
+                          getCategoryBudgetCents(category, categoryBudgetPeriods, selectedYear, selectedMonth) - total;
                         const categoryIndex = section.categories.findIndex((sectionCategory) => sectionCategory.id === category.id);
                         const calculatedValue =
                           section.role === 'income' && categoryIndex === 0
