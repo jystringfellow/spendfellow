@@ -49,6 +49,7 @@ export interface Account {
   current_balance_cents: number | null;
   available_balance_cents: number | null;
   balance_category: 'checking' | 'savings' | 'ccDebt' | 'investments' | 'hidden' | null;
+  source: 'plaid' | 'manual';
   currency_code: string;
   is_active: boolean;
   last_balance_sync_at: string | null;
@@ -222,6 +223,7 @@ export interface Transaction {
   category_id: string | null;
   plaid_transaction_id: string | null;
   plaid_environment: 'sandbox' | 'development' | 'production' | null;
+  source: 'plaid' | 'manual';
   date: string;
   amount_cents: number;
   merchant_name: string | null;
@@ -230,6 +232,15 @@ export interface Transaction {
   notes: string | null;
   created_at: string;
   updated_at: string;
+}
+
+export interface CreditCardPaymentLink {
+  id: string;
+  household_id: string;
+  checking_transaction_id: string;
+  credit_transaction_id: string;
+  created_by: string;
+  created_at: string;
 }
 
 export interface Tag {

@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Budget App Amazon Sync
 // @namespace    https://github.com/jystringfellow/spendfellow
-// @version      0.1.20
+// @version      0.1.25
 // @description  User-authorized Amazon transaction/order import for a self-hosted budgeting app
 // @match        https://www.amazon.com/*
 // @match        https://www.amazon.com/cpe/yourpayments/transactions*
@@ -19,11 +19,10 @@
 (function () {
   'use strict';
 
-  const SCRIPT_VERSION = '0.1.20';
+  const SCRIPT_VERSION = '0.1.25';
   const STORAGE_KEY = 'budgetAmazonSync';
-  const MAX_TRANSACTION_PAGES = 10;
+  const MAX_TRANSACTION_PAGES = 50;
   const MAX_ORDER_DETAILS = 250;
-  const MAX_CONSECUTIVE_SEEN_TRANSACTIONS = 10;
   const REQUEST_TIMEOUT_MS = 30000;
 
   function getParams() {
@@ -69,12 +68,14 @@
         startedAt: Date.now(),
         transactionPagesScanned: 0,
         orderDetailsImported: 0,
-        consecutiveSeenTransactions: 0,
+        orderDetailsQueued: 0,
+        orderQueueReasonCounts: {},
         forceReindex,
         stopAfterOrderQueue: null,
         orderQueue: [],
         transactionsUrl: getCleanTransactionsUrl(),
         nextTransactionsUrl: null,
+        transactionPageDebugHistory: [],
       };
       GM_setValue(STORAGE_KEY, JSON.stringify(state));
       stripBudgetSyncParamsFromLocation();
@@ -99,12 +100,14 @@
         startedAt: Date.now(),
         transactionPagesScanned: 0,
         orderDetailsImported: 0,
-        consecutiveSeenTransactions: 0,
+        orderDetailsQueued: 0,
+        orderQueueReasonCounts: {},
         forceReindex,
         stopAfterOrderQueue: null,
         orderQueue: [],
         transactionsUrl: getCleanTransactionsUrl(),
         nextTransactionsUrl: null,
+        transactionPageDebugHistory: [],
       };
       GM_setValue(STORAGE_KEY, JSON.stringify(state));
       stripBudgetSyncParamsFromLocation();
@@ -157,7 +160,7 @@
     GM_setValue(STORAGE_KEY, '{}');
   }
 
-  function setStatus(message, detail) {
+  function getStatusPanel() {
     let panel = document.getElementById('budget-amazon-sync-status');
     if (!panel) {
       panel = document.createElement('div');
@@ -179,16 +182,127 @@
       document.body.appendChild(panel);
     }
 
+    return panel;
+  }
+
+  function setStatus(message, detail) {
+    const panel = getStatusPanel();
+
     panel.textContent = detail ? `Amazon Budget Sync: ${message} ${detail}` : `Amazon Budget Sync: ${message}`;
   }
 
+  function getOrderImportSummary(state) {
+    const importedCount = state.orderDetailsImported || 0;
+    if (importedCount > 0) {
+      return `${importedCount} new order detail page${importedCount === 1 ? '' : 's'} imported`;
+    }
+
+    if ((state.orderDetailsQueued || 0) === 0 && (state.transactionPagesScanned || 0) > 0) {
+      return 'No new order detail pages needed; stored item details were already complete';
+    }
+
+    return '0 new order detail pages imported';
+  }
+
   function finishSync(state, message, detail) {
-    setStatus(message, detail);
+    const debug = {
+      scriptVersion: SCRIPT_VERSION,
+      message,
+      detail: detail || null,
+      finishedAt: new Date().toISOString(),
+      transactionPagesScanned: state.transactionPagesScanned || 0,
+      orderDetailsImported: state.orderDetailsImported || 0,
+      cutoffDate: state.cutoffDate || null,
+      forceReindex: Boolean(state.forceReindex),
+      orderDetailsQueued: state.orderDetailsQueued || 0,
+      orderQueueReasonCounts: state.orderQueueReasonCounts || {},
+      lastTransactionsPageDebug: state.lastTransactionsPageDebug || null,
+      transactionPageDebugHistory: state.transactionPageDebugHistory || [],
+    };
     clearState();
 
-    if (!state.previewOnly) {
-      window.setTimeout(() => window.close(), 1200);
+    const panel = getStatusPanel();
+    panel.textContent = '';
+
+    const summary = document.createElement('div');
+    summary.style.fontWeight = '700';
+    summary.textContent = `Amazon Budget Sync: ${message}`;
+    panel.appendChild(summary);
+
+    if (detail) {
+      const detailNode = document.createElement('div');
+      detailNode.style.cssText = 'margin-top:4px;color:#4b5563';
+      detailNode.textContent = detail;
+      panel.appendChild(detailNode);
     }
+
+    const actions = document.createElement('div');
+    actions.style.cssText = 'display:flex;gap:8px;flex-wrap:wrap;margin-top:10px';
+
+    const closeButton = document.createElement('button');
+    closeButton.type = 'button';
+    closeButton.textContent = 'Close sync tab';
+    closeButton.style.cssText = [
+      'border:0',
+      'border-radius:6px',
+      'padding:7px 10px',
+      'background:#1f6feb',
+      'color:#fff',
+      'font-weight:700',
+      'cursor:pointer',
+    ].join(';');
+    closeButton.addEventListener('click', () => {
+      window.close();
+      window.setTimeout(() => {
+        closeButton.textContent = 'Close this tab manually';
+      }, 250);
+    });
+    actions.appendChild(closeButton);
+
+    const copyButton = document.createElement('button');
+    copyButton.type = 'button';
+    copyButton.textContent = 'Copy debug details';
+    copyButton.style.cssText = [
+      'border:1px solid #9ca3af',
+      'border-radius:6px',
+      'padding:7px 10px',
+      'background:#fff',
+      'color:#111827',
+      'font-weight:600',
+      'cursor:pointer',
+    ].join(';');
+    copyButton.addEventListener('click', async () => {
+      try {
+        await navigator.clipboard.writeText(JSON.stringify(debug, null, 2));
+        copyButton.textContent = 'Copied';
+      } catch {
+        copyButton.textContent = 'Copy failed; expand below';
+      }
+    });
+    actions.appendChild(copyButton);
+    panel.appendChild(actions);
+
+    const debugDetails = document.createElement('details');
+    debugDetails.style.marginTop = '10px';
+    const debugSummary = document.createElement('summary');
+    debugSummary.textContent = 'Debug details';
+    debugSummary.style.cursor = 'pointer';
+    const debugOutput = document.createElement('pre');
+    debugOutput.style.cssText = [
+      'max-height:240px',
+      'overflow:auto',
+      'margin:8px 0 0',
+      'padding:8px',
+      'border-radius:6px',
+      'background:#111827',
+      'color:#f9fafb',
+      'font:11px/1.4 Menlo,Consolas,monospace',
+      'white-space:pre-wrap',
+    ].join(';');
+    debugOutput.textContent = JSON.stringify(debug, null, 2);
+    debugDetails.appendChild(debugSummary);
+    debugDetails.appendChild(debugOutput);
+    panel.appendChild(debugDetails);
   }
 
   function showPreviewPayload(title, payload) {
@@ -346,23 +460,11 @@
     return Boolean(transactionDate && cutoffDate && transactionDate < cutoffDate);
   }
 
-  function getConsecutiveSeenTransactionCount(currentCount, transactionStatuses) {
-    if (!Array.isArray(transactionStatuses)) {
-      return currentCount || 0;
-    }
-
-    let count = currentCount || 0;
-    for (const transaction of transactionStatuses) {
-      if (transaction && transaction.existing) {
-        count += 1;
-      } else {
-        count = 0;
-      }
-    }
-    return count;
-  }
-
   function absoluteUrl(href) {
+    if (!href) {
+      return null;
+    }
+
     try {
       return new URL(href, window.location.origin).toString();
     } catch {
@@ -381,7 +483,7 @@
       .join('|');
   }
 
-  function waitForTransactionsPageChange(previousSignature, callback, attempt) {
+  function waitForTransactionsPageChange(previousSignature, callback, state, attempt) {
     const currentAttempt = attempt || 0;
     const currentSignature = getTransactionsPageSignature();
     if (currentSignature && currentSignature !== previousSignature) {
@@ -389,15 +491,21 @@
       return;
     }
 
-    if (currentAttempt >= 20) {
-      setStatus(
+    if (currentAttempt >= 60) {
+      finishSync(
+        state,
         'Stopped: next transaction page did not load',
-        `Still seeing ${currentSignature || 'no transactions'}`
+        JSON.stringify({
+          previousSignature: previousSignature || null,
+          currentSignature: currentSignature || null,
+          pageUrl: window.location.href,
+          paginationDebug: getTransactionPaginationDebug(),
+        })
       );
       return;
     }
 
-    window.setTimeout(() => waitForTransactionsPageChange(previousSignature, callback, currentAttempt + 1), 500);
+    window.setTimeout(() => waitForTransactionsPageChange(previousSignature, callback, state, currentAttempt + 1), 500);
   }
 
   function postToApp(state, path, body) {
@@ -592,12 +700,16 @@
       `${(state.orderQueue || []).length} order details queued so far`
     );
     nextControl.click();
-    waitForTransactionsPageChange(previousSignature, () => {
-      const storedState = loadState();
-      if (storedState && window.location.pathname.includes('/cpe/yourpayments/transactions')) {
-        void scanTransactions(storedState);
-      }
-    });
+    waitForTransactionsPageChange(
+      previousSignature,
+      () => {
+        const storedState = loadState();
+        if (storedState && window.location.pathname.includes('/cpe/yourpayments/transactions')) {
+          void scanTransactions(storedState);
+        }
+      },
+      state
+    );
     return true;
   }
 
@@ -617,7 +729,12 @@
           parentClasses: link.parentElement?.className || null,
         };
       })
-      .filter((link) => /next|page|\b\d+\b/i.test(link.label) || /page|offset|start|token/i.test(link.href || ''))
+      .filter(
+        (link) =>
+          /\b(?:next|previous)\b|\bpage\s*\d+\b/i.test(link.label) ||
+          /[?&](?:page|offset|start|token)=|pagination|nextPage/i.test(link.href || '')
+      )
+      .map((link) => ({ ...link, label: link.label.slice(0, 300) }))
       .slice(0, 25);
 
     return {
@@ -634,7 +751,23 @@
     }
 
     if (state.transactionPagesScanned >= MAX_TRANSACTION_PAGES) {
-      finishSync(state, 'Stopped: conservative page limit reached');
+      state.nextTransactionsUrl = null;
+      state.stopAfterOrderQueue = '50-page safety limit reached';
+      saveState(state);
+      if ((state.orderQueue || []).length > 0) {
+        setStatus(
+          'page safety limit reached; opening order details...',
+          `${state.orderQueue.length} queued from ${state.transactionPagesScanned} transaction pages`
+        );
+        navigateToNextOrder(state);
+        return;
+      }
+
+      finishSync(
+        state,
+        'Stopped: 50-page safety limit reached',
+        getOrderImportSummary(state)
+      );
       return;
     }
 
@@ -643,6 +776,8 @@
     const transactions = [];
     let reachedCutoff = false;
     const nextPage = findNextTransactionsPage();
+    const nextControl = findNextTransactionsControl();
+    const nextControlLabel = nextControl ? getControlLabel(nextControl).slice(0, 300) : null;
     const paginationDebug = getTransactionPaginationDebug();
     const orderLinkCount = document.querySelectorAll('a[href*="orderID="], a[href*="orderId="]').length;
 
@@ -664,6 +799,21 @@
     state.transactionsUrl = getCleanTransactionsUrl();
     state.nextTransactionsUrl = reachedCutoff ? null : nextPage;
     state.stopAfterOrderQueue = reachedCutoff ? 'cutoff date reached' : null;
+    state.transactionPageDebugHistory = [
+      ...(state.transactionPageDebugHistory || []),
+      {
+        pageNumber: state.transactionPagesScanned,
+        pageUrl: window.location.href,
+        rowCount: rows.length,
+        parsedTransactionCount: transactions.length,
+        nextTransactionsUrl: state.nextTransactionsUrl,
+        nextTransactionsLinkFound: Boolean(nextPage),
+        nextTransactionsControlFound: Boolean(nextControl),
+        nextTransactionsControlLabel: nextControlLabel,
+        reachedCutoff,
+        paginationDebug,
+      },
+    ].slice(-10);
     saveState(state);
 
     if (state.previewOnly) {
@@ -679,6 +829,8 @@
         forceReindex: Boolean(state.forceReindex),
         nextTransactionsUrl: state.nextTransactionsUrl,
         nextTransactionsLinkFound: Boolean(nextPage),
+        nextTransactionsControlFound: Boolean(nextControl),
+        nextTransactionsControlLabel: nextControlLabel,
         paginationDebug,
         reachedCutoff,
         note: state.cutoffDate
@@ -698,22 +850,40 @@
       forceReindex: Boolean(state.forceReindex),
     });
     state.cutoffDate = result.cutoff_date || state.cutoffDate || null;
-    state.consecutiveSeenTransactions = state.forceReindex
-      ? 0
-      : getConsecutiveSeenTransactionCount(state.consecutiveSeenTransactions, result.transaction_statuses);
-    if (state.consecutiveSeenTransactions >= MAX_CONSECUTIVE_SEEN_TRANSACTIONS) {
-      state.nextTransactionsUrl = null;
-      state.stopAfterOrderQueue = 'previously synced transactions reached';
-    }
     const neededOrders = Array.isArray(result.needed_orders) ? result.needed_orders : [];
+    const lastPageDebug = state.transactionPageDebugHistory?.[state.transactionPageDebugHistory.length - 1];
+    if (lastPageDebug) {
+      lastPageDebug.apiResult = {
+        importedTransactionCount: result.imported_count ?? null,
+        existingTransactionCount: result.existing_transaction_count ?? null,
+        completeOrderCount: result.complete_order_count ?? null,
+        incompleteOrderCount: result.incomplete_order_count ?? null,
+        neededOrderCount: neededOrders.length,
+      };
+    }
 
     if (neededOrders.length > 0) {
-      state.orderQueue = [...(state.orderQueue || []), ...neededOrders].slice(0, MAX_ORDER_DETAILS);
+      const previousQueueLength = (state.orderQueue || []).length;
+      const queuedByOrderId = new Map(
+        [...(state.orderQueue || []), ...neededOrders].map((order) => [order.orderId, order])
+      );
+      state.orderQueue = Array.from(queuedByOrderId.values()).slice(0, MAX_ORDER_DETAILS);
+      state.orderDetailsQueued =
+        (state.orderDetailsQueued || 0) + Math.max(0, state.orderQueue.length - previousQueueLength);
+      state.orderQueueReasonCounts = neededOrders.reduce(
+        (counts, order) => ({
+          ...counts,
+          [order.reason || 'unknown']: (counts[order.reason || 'unknown'] || 0) + 1,
+        }),
+        state.orderQueueReasonCounts || {}
+      );
       state.orderDetailsImported = state.orderDetailsImported || 0;
       state.lastTransactionsPageDebug = {
         pageUrl: window.location.href,
         nextTransactionsUrl: state.nextTransactionsUrl,
         nextTransactionsLinkFound: Boolean(nextPage),
+        nextTransactionsControlFound: Boolean(nextControl),
+        nextTransactionsControlLabel: nextControlLabel,
         queuedOrderCount: state.orderQueue.length,
       };
       saveState(state);
@@ -729,35 +899,11 @@
         return;
       }
 
-      finishSync(state, 'Stopped: cutoff date reached', `${state.orderDetailsImported || 0} orders imported`);
-      return;
-    }
-
-    if (state.consecutiveSeenTransactions >= MAX_CONSECUTIVE_SEEN_TRANSACTIONS) {
-      if ((state.orderQueue || []).length > 0) {
-        setStatus(
-          'known transactions reached; opening order details...',
-          `${state.orderQueue.length} queued from ${state.transactionPagesScanned} transaction pages`
-        );
-        navigateToNextOrder(state);
-        return;
-      }
-
-      finishSync(state, 'Stopped: reached previously synced transactions', `${state.consecutiveSeenTransactions} seen in a row`);
-      return;
-    }
-
-    if (result.stop) {
-      if ((state.orderQueue || []).length > 0) {
-        setStatus(
-          'transaction scan complete; opening order details...',
-          `${state.orderQueue.length} queued from ${state.transactionPagesScanned} transaction pages`
-        );
-        navigateToNextOrder(state);
-        return;
-      }
-
-      finishSync(state, 'Stopped: reached known data', `${state.orderDetailsImported || 0} orders imported`);
+      finishSync(
+        state,
+        'Complete: cutoff date reached',
+        getOrderImportSummary(state)
+      );
       return;
     }
 
@@ -774,19 +920,23 @@
       return;
     }
 
-    finishSync(state, 'Stopped: no more transaction pages', `${state.orderDetailsImported || 0} orders imported`);
+    finishSync(
+      state,
+      'Complete: no more transaction pages',
+      getOrderImportSummary(state)
+    );
   }
 
   function navigateToNextOrder(state) {
     const next = state.orderQueue.shift();
     saveState(state);
     if (!next) {
-      setStatus(`${state.orderDetailsImported || 0} orders imported`);
+      setStatus(getOrderImportSummary(state));
       if (state.stopAfterOrderQueue) {
         const reason = state.stopAfterOrderQueue;
         state.stopAfterOrderQueue = null;
         saveState(state);
-        finishSync(state, `Stopped: ${reason}`, `${state.orderDetailsImported || 0} orders imported`);
+        finishSync(state, `Complete: ${reason}`, getOrderImportSummary(state));
         return;
       }
 
@@ -797,10 +947,10 @@
 
       finishSync(
         state,
-        'Stopped: no more transaction pages',
+        'Complete: no more transaction pages',
         state.lastTransactionsPageDebug
           ? JSON.stringify(state.lastTransactionsPageDebug)
-          : `${state.orderDetailsImported || 0} orders imported`
+          : getOrderImportSummary(state)
       );
       return;
     }
@@ -945,6 +1095,29 @@
       items: parseOrderItems(),
     };
 
+    if (order.items.length === 0) {
+      finishSync(
+        state,
+        'Stopped: no item details found on order page',
+        JSON.stringify({
+          orderId,
+          pageUrl: window.location.href,
+          pageTitle: document.title,
+          itemTitleComponents: document.querySelectorAll('[data-component="itemTitle"]').length,
+          productLinks: document.querySelectorAll('a[href*="/dp/"], a[href*="/gp/product/"]').length,
+          unitPriceComponents: document.querySelectorAll('[data-component="unitPrice"]').length,
+          parsedSummary: {
+            itemSubtotal: order.itemSubtotal,
+            shipping: order.shipping,
+            discounts: order.discounts,
+            tax: order.tax,
+            grandTotal: order.grandTotal,
+          },
+        })
+      );
+      return;
+    }
+
     if (state.previewOnly) {
       showPreviewPayload('order details payload', {
         token: 'preview-mode-does-not-create-a-token',
@@ -957,7 +1130,7 @@
     await postToApp(state, '/api/amazon-sync/orders', { order });
     state.orderDetailsImported = (state.orderDetailsImported || 0) + 1;
     saveState(state);
-    setStatus(`${state.orderDetailsImported} orders imported`);
+    setStatus(getOrderImportSummary(state));
     navigateToNextOrder(state);
   }
 
@@ -993,7 +1166,7 @@
         state.previewOnly ? 'preview mode active; open transactions or order details' : 'sync mode active; open transactions'
       );
     } catch (error) {
-      setStatus('Stopped: error', error instanceof Error ? error.message : String(error));
+      finishSync(state, 'Stopped: error', error instanceof Error ? error.stack || error.message : String(error));
     }
   }
 

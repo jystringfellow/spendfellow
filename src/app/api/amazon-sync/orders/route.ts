@@ -42,31 +42,6 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: 'order.orderId is required.' }, { status: 400 });
   }
 
-  const now = new Date().toISOString();
-  const orderRow = {
-    user_id: session.user_id,
-    household_id: session.household_id,
-    sync_session_id: session.id,
-    order_id: orderId,
-    order_detail_url: normalizeNullableText(payload.order?.orderDetailUrl ?? payload.pageUrl, 1000),
-    item_subtotal_cents: parseAmazonMoneyToCents(payload.order?.itemSubtotal),
-    shipping_cents: parseAmazonMoneyToCents(payload.order?.shipping),
-    discounts_cents: parseAmazonMoneyToCents(payload.order?.discounts),
-    tax_cents: parseAmazonMoneyToCents(payload.order?.tax),
-    grand_total_cents: parseAmazonMoneyToCents(payload.order?.grandTotal),
-    details_imported_at: now,
-  };
-
-  const { error: orderError } = await serviceSupabase.from('amazon_orders').upsert(orderRow, {
-    onConflict: 'household_id,order_id',
-  });
-
-  if (orderError) {
-    return NextResponse.json({ error: orderError.message }, { status: 500 });
-  }
-
-  await serviceSupabase.from('amazon_order_items').delete().eq('household_id', session.household_id).eq('order_id', orderId);
-
   const itemRows = (payload.order?.items ?? [])
     .slice(0, AMAZON_SYNC_MAX_ORDER_ITEMS)
     .map((item, index) => ({
@@ -81,11 +56,59 @@ export async function POST(request: NextRequest) {
     }))
     .filter((item) => item.title !== 'Unknown item' || item.price_cents !== null || item.asin !== null);
 
-  if (itemRows.length > 0) {
-    const { error: itemError } = await serviceSupabase.from('amazon_order_items').insert(itemRows);
-    if (itemError) {
-      return NextResponse.json({ error: itemError.message }, { status: 500 });
-    }
+  if (itemRows.length === 0) {
+    return NextResponse.json(
+      { error: 'Amazon did not expose any item details on this order page. The order was left incomplete so it can be retried.' },
+      { status: 422 }
+    );
+  }
+
+  const orderRow = {
+    user_id: session.user_id,
+    household_id: session.household_id,
+    sync_session_id: session.id,
+    order_id: orderId,
+    order_detail_url: normalizeNullableText(payload.order?.orderDetailUrl ?? payload.pageUrl, 1000),
+    item_subtotal_cents: parseAmazonMoneyToCents(payload.order?.itemSubtotal),
+    shipping_cents: parseAmazonMoneyToCents(payload.order?.shipping),
+    discounts_cents: parseAmazonMoneyToCents(payload.order?.discounts),
+    tax_cents: parseAmazonMoneyToCents(payload.order?.tax),
+    grand_total_cents: parseAmazonMoneyToCents(payload.order?.grandTotal),
+    details_imported_at: null,
+  };
+
+  const { error: orderShellError } = await serviceSupabase.from('amazon_orders').upsert(orderRow, {
+    onConflict: 'household_id,order_id',
+  });
+
+  if (orderShellError) {
+    return NextResponse.json({ error: orderShellError.message }, { status: 500 });
+  }
+
+  const { error: deleteError } = await serviceSupabase
+    .from('amazon_order_items')
+    .delete()
+    .eq('household_id', session.household_id)
+    .eq('order_id', orderId);
+
+  if (deleteError) {
+    return NextResponse.json({ error: deleteError.message }, { status: 500 });
+  }
+
+  const { error: itemError } = await serviceSupabase.from('amazon_order_items').insert(itemRows);
+  if (itemError) {
+    return NextResponse.json({ error: itemError.message }, { status: 500 });
+  }
+
+  const now = new Date().toISOString();
+  const { error: orderError } = await serviceSupabase
+    .from('amazon_orders')
+    .update({ details_imported_at: now })
+    .eq('household_id', session.household_id)
+    .eq('order_id', orderId);
+
+  if (orderError) {
+    return NextResponse.json({ error: orderError.message }, { status: 500 });
   }
 
   return NextResponse.json({

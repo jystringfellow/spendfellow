@@ -113,7 +113,8 @@ export default function AmazonSyncPanel() {
       <Typography variant="h6">Amazon Purchase Sync</Typography>
       <Typography color="text.secondary">
         Import Amazon purchase metadata through a user-installed Tampermonkey script. The app creates a short-lived token,
-        then Amazon pages that you manually open send scraped transactions and order details back to this deployment.
+        then Amazon pages that you manually open send scraped transactions and order details back to this deployment. The
+        sync tab stays open with debug details until you close it.
       </Typography>
       {isLocalOrigin ? (
         <Alert severity="info">
@@ -132,15 +133,18 @@ export default function AmazonSyncPanel() {
         value={cutoffDate}
         onChange={(event) => setCutoffDate(event.target.value)}
         InputLabelProps={{ shrink: true }}
-        helperText="The userscript stops scanning once it reaches this transaction date."
+        helperText="The userscript stops scanning once it reaches this date. Choose an earlier date to crawl further back."
         sx={{ width: { xs: '100%', sm: 280 } }}
       />
       <FormControlLabel
         control={
           <Checkbox checked={forceReindex} onChange={(event) => setForceReindex(event.target.checked)} />
         }
-        label="Force re-index transactions and order details"
+        label="Revisit every imported order detail (force re-index)"
       />
+      <Typography variant="caption" color="text.secondary">
+        A normal sync still scans transaction pages to the cutoff, but skips order-detail pages already imported.
+      </Typography>
       <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1.5}>
         <Button
           variant="contained"
@@ -155,7 +159,7 @@ export default function AmazonSyncPanel() {
         </Button>
         <Button
           component="a"
-          href="/amazon-sync.user.js?v=0.1.20"
+          href="/amazon-sync.user.js?v=0.1.25"
           target="_blank"
           rel="noreferrer"
           startIcon={<ExtensionIcon />}

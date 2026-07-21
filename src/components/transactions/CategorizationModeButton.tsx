@@ -27,14 +27,17 @@ import KeyboardBackspaceIcon from '@mui/icons-material/KeyboardBackspace';
 import OpenInNewIcon from '@mui/icons-material/OpenInNew';
 import SkipNextIcon from '@mui/icons-material/SkipNext';
 import PlaylistAddCheckIcon from '@mui/icons-material/PlaylistAddCheck';
+import { findUniqueAmazonRefundItemIds } from '@/lib/amazonRefundItems';
+import { allocateAmazonSplitAmounts } from '@/lib/amazonSplitAllocation';
 import { formatCurrency, parseCurrencyToCents } from '@/lib/money';
 import type { Category, Tag } from '@/types/database';
 import TagAutocomplete from './TagAutocomplete';
+import CreditCardPaymentLinkButton from './CreditCardPaymentLinkButton';
 import type { EditableTransactionRow } from './TransactionsTable';
 
 interface CategorizationModeButtonProps {
   transactions: EditableTransactionRow[];
-  categories: Pick<Category, 'id' | 'name'>[];
+  categories: Pick<Category, 'id' | 'name' | 'is_income'>[];
   tags: Pick<Tag, 'id' | 'name' | 'color'>[];
 }
 
@@ -233,17 +236,17 @@ function getAmazonDisplayDiscountsCents(transaction: EditableTransactionRow): nu
   return inferredDiscountsCents === 0 ? order.discountsCents : inferredDiscountsCents;
 }
 
-function createAmazonSplitDrafts(transaction: EditableTransactionRow): SplitDraft[] {
+function createAmazonSplitDrafts(transaction: EditableTransactionRow, incomeCategoryId: string): SplitDraft[] {
   if (
     !transaction.amazon_match ||
     transaction.amazon_match.isRefund ||
     transaction.amount_cents <= 0 ||
-    transaction.amazon_match.items.length < 2
+    transaction.amazon_match.items.length === 0
   ) {
     return [];
   }
 
-  const itemSplits = transaction.amazon_match.items.flatMap((item) => {
+  const validItems = transaction.amazon_match.items.flatMap((item) => {
     const totalCents = getAmazonItemTotalCents(item.priceCents, item.quantity);
     if (totalCents === null || totalCents <= 0) {
       return [];
@@ -251,36 +254,44 @@ function createAmazonSplitDrafts(transaction: EditableTransactionRow): SplitDraf
 
     return [
       {
-        amount: stripCurrencySymbol(formatCurrency(totalCents)),
-        categoryId: '',
-        notes: item.title,
-        tagIds: [],
-        tagNames: [],
+        item,
+        totalCents,
       },
     ];
   });
 
-  if (itemSplits.length === 0) {
+  const allocation = allocateAmazonSplitAmounts(
+    validItems.map(({ item, totalCents }) => ({ id: item.id, amountCents: totalCents })),
+    transaction.amount_cents,
+    transaction.amazon_match.order?.grandTotalCents ?? null
+  );
+  if (!allocation) {
     return [];
   }
 
-  const itemTotalCents = itemSplits.reduce((total, split) => total + parseCurrencyToCents(split.amount), 0);
-  const remainderCents = transaction.amount_cents - itemTotalCents;
-  if (remainderCents !== 0) {
+  const allocatedAmountByItemId = new Map(allocation.itemAmounts.map((item) => [item.id, item.amountCents]));
+  const itemSplits: SplitDraft[] = validItems.map(({ item }) => ({
+    amount: stripCurrencySymbol(formatCurrency(allocatedAmountByItemId.get(item.id) ?? 0)),
+    categoryId: '',
+    notes: item.title,
+    tagIds: [],
+    tagNames: [],
+  }));
+
+  if (allocation.creditCents > 0) {
     itemSplits.push({
-      amount: stripCurrencySymbol(formatCurrency(remainderCents)),
-      categoryId: '',
-      notes: 'Amazon tax, shipping, discounts, and adjustments',
+      amount: stripCurrencySymbol(formatCurrency(-allocation.creditCents)),
+      categoryId: incomeCategoryId,
+      notes: 'Amazon gift card or promotional credit',
       tagIds: [],
       tagNames: [],
     });
   }
 
-  return itemSplits;
+  return itemSplits.length >= 2 ? itemSplits : [];
 }
 
-function getSingleAmazonItem(transaction: EditableTransactionRow) {
-  const items = transaction.amazon_match?.items ?? [];
+function getSingleAmazonItem(items: NonNullable<EditableTransactionRow['amazon_match']>['items']) {
   return items.length === 1 ? items[0] : null;
 }
 
@@ -301,8 +312,37 @@ export default function CategorizationModeButton({ transactions, categories, tag
     [completedIds, transactions]
   );
   const currentTransaction = queue[currentIndex] ?? queue[0];
-  const amazonSplitDrafts = currentTransaction ? createAmazonSplitDrafts(currentTransaction) : [];
-  const singleAmazonItem = currentTransaction ? getSingleAmazonItem(currentTransaction) : null;
+  const incomeCategoryId =
+    categories.find((category) => category.is_income && category.name.toLowerCase() === 'income transfers')?.id ??
+    categories.find((category) => category.is_income)?.id ??
+    '';
+  const amazonItems = currentTransaction?.amazon_match?.items ?? [];
+  const inferredRefundItemIds =
+    currentTransaction?.amazon_match?.isRefund && amazonItems.length > 0
+      ? findUniqueAmazonRefundItemIds(
+          amazonItems.flatMap((item) => {
+            const amountCents = getAmazonItemTotalCents(item.priceCents, item.quantity);
+            return amountCents !== null && amountCents > 0 ? [{ id: item.id, amountCents }] : [];
+          }),
+          currentTransaction.amazon_match.amountCents,
+          currentTransaction.amazon_match.order?.grandTotalCents ?? null
+        )
+      : null;
+  const amazonDisplayItems = inferredRefundItemIds
+    ? amazonItems.filter((item) => inferredRefundItemIds.includes(item.id))
+    : amazonItems;
+  const amazonRefundItemsFiltered = Boolean(
+    currentTransaction?.amazon_match?.isRefund &&
+      inferredRefundItemIds &&
+      amazonDisplayItems.length < amazonItems.length
+  );
+  const amazonRefundItemsAmbiguous = Boolean(
+    currentTransaction?.amazon_match?.isRefund &&
+      amazonItems.length > 1 &&
+      inferredRefundItemIds === null
+  );
+  const amazonSplitDrafts = currentTransaction ? createAmazonSplitDrafts(currentTransaction, incomeCategoryId) : [];
+  const singleAmazonItem = getSingleAmazonItem(amazonDisplayItems);
   const amazonDisplayItemSubtotalCents = currentTransaction ? getAmazonDisplayItemSubtotalCents(currentTransaction) : null;
   const amazonDisplayDiscountsCents = currentTransaction ? getAmazonDisplayDiscountsCents(currentTransaction) : null;
   const amazonBeforeTaxCents = currentTransaction ? getAmazonBeforeTaxCents(currentTransaction) : null;
@@ -442,6 +482,17 @@ export default function CategorizationModeButton({ transactions, categories, tag
     moveToNext(nextCompletedIds, nextSkippedIds);
   }
 
+  function completeCurrentAfterPaymentLink(counterpartTransactionId: string) {
+    if (!currentTransaction) {
+      return;
+    }
+
+    const nextCompletedIds = new Set(completedIds);
+    nextCompletedIds.add(currentTransaction.id);
+    nextCompletedIds.add(counterpartTransactionId);
+    moveToNext(nextCompletedIds);
+  }
+
   function goBackToSkipped() {
     const skippedTransaction = skippedHistory[skippedHistory.length - 1];
     if (!skippedTransaction) {
@@ -519,6 +570,17 @@ export default function CategorizationModeButton({ transactions, categories, tag
                   <Chip size="small" label={currentTransaction.pending ? 'Pending' : 'Posted'} />
                 </Stack>
               </Box>
+
+              <CreditCardPaymentLinkButton
+                transactionId={currentTransaction.id}
+                link={currentTransaction.credit_card_payment_link ?? null}
+                eligible={
+                  !currentTransaction.pending &&
+                  ((currentTransaction.accounts?.type === 'depository' && currentTransaction.amount_cents > 0) ||
+                    (currentTransaction.accounts?.type === 'credit' && currentTransaction.amount_cents < 0))
+                }
+                onLinked={completeCurrentAfterPaymentLink}
+              />
 
               {currentTransaction.amazon_match ? (
                 <Box
@@ -609,9 +671,21 @@ export default function CategorizationModeButton({ transactions, categories, tag
                       </Stack>
                     ) : null}
 
-                    {currentTransaction.amazon_match.items.length > 0 ? (
+                    {amazonRefundItemsFiltered ? (
+                      <Typography variant="caption" color="text.secondary">
+                        Likely refunded {amazonDisplayItems.length === 1 ? 'item' : 'items'}, inferred by matching the
+                        refund amount after proportional tax and discount allocation.
+                      </Typography>
+                    ) : amazonRefundItemsAmbiguous ? (
+                      <Typography variant="caption" color="text.secondary">
+                        The refund amount does not identify a unique item, so the full order is shown. Open the order to
+                        confirm what was returned.
+                      </Typography>
+                    ) : null}
+
+                    {amazonDisplayItems.length > 0 ? (
                       <Stack spacing={0.75}>
-                        {currentTransaction.amazon_match.items.map((item) => {
+                        {amazonDisplayItems.map((item) => {
                           const itemTotalCents = getAmazonItemTotalCents(item.priceCents, item.quantity);
                           return (
                             <Box

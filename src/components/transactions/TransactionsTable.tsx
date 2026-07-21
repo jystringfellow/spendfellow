@@ -22,16 +22,21 @@ import SaveIcon from '@mui/icons-material/Save';
 import CheckIcon from '@mui/icons-material/Check';
 import CallSplitIcon from '@mui/icons-material/CallSplit';
 import { formatCurrency } from '@/lib/money';
+import CreditCardPaymentLinkButton, { type CreditCardPaymentLinkSummary } from './CreditCardPaymentLinkButton';
+import ManualTransactionDialog, { type ManualTransactionAccountOption } from './ManualTransactionDialog';
 import TagAutocomplete from './TagAutocomplete';
 import type { Category, Tag, Transaction } from '@/types/database';
 
 export interface EditableTransactionRow extends Transaction {
   accounts: {
     name: string;
+    type: string;
+    source: 'plaid' | 'manual';
   } | null;
   amazon_match?: AmazonTransactionMatch | null;
   transaction_tag_ids: string[];
   transaction_split_count: number;
+  credit_card_payment_link?: CreditCardPaymentLinkSummary | null;
 }
 
 export interface AmazonTransactionMatch {
@@ -63,8 +68,9 @@ export interface AmazonOrderItemMatch {
 
 interface TransactionsTableProps {
   transactions: EditableTransactionRow[];
-  categories: Pick<Category, 'id' | 'name'>[];
+  categories: Pick<Category, 'id' | 'name' | 'is_income'>[];
   tags: Pick<Tag, 'id' | 'name' | 'color'>[];
+  accounts: ManualTransactionAccountOption[];
 }
 
 interface RowDraft {
@@ -89,7 +95,7 @@ function createDraft(transaction: EditableTransactionRow): RowDraft {
   };
 }
 
-export default function TransactionsTable({ transactions, categories, tags }: TransactionsTableProps) {
+export default function TransactionsTable({ transactions, categories, tags, accounts }: TransactionsTableProps) {
   const router = useRouter();
   const [tagOptions, setTagOptions] = useState(tags);
   const [drafts, setDrafts] = useState<Record<string, RowDraft>>(() =>
@@ -234,6 +240,10 @@ export default function TransactionsTable({ transactions, categories, tags }: Tr
                         label={`Split ${transaction.transaction_split_count}`}
                       />
                     ) : null}
+                    {transaction.source === 'manual' ? <Chip size="small" variant="outlined" label="Manual" /> : null}
+                    {transaction.credit_card_payment_link ? (
+                      <Chip size="small" color="secondary" variant="outlined" label="CC payment" />
+                    ) : null}
                   </Stack>
                   {transaction.merchant_name ? (
                     <Typography variant="body2" color="text.secondary">
@@ -276,6 +286,15 @@ export default function TransactionsTable({ transactions, categories, tags }: Tr
               <TableCell>
                 <Stack direction="row" spacing={0.75} flexWrap="wrap">
                   <Chip size="small" label={transaction.pending ? 'Pending' : 'Posted'} />
+                  <CreditCardPaymentLinkButton
+                    transactionId={transaction.id}
+                    link={transaction.credit_card_payment_link ?? null}
+                    eligible={
+                      !transaction.pending &&
+                      ((transaction.accounts?.type === 'depository' && transaction.amount_cents > 0) ||
+                        (transaction.accounts?.type === 'credit' && transaction.amount_cents < 0))
+                    }
+                  />
                 </Stack>
               </TableCell>
               <TableCell>
@@ -323,6 +342,14 @@ export default function TransactionsTable({ transactions, categories, tags }: Tr
                   >
                     {draft.isSaving ? 'Saving' : draft.saved ? 'Saved' : 'Save'}
                   </Button>
+                  {transaction.source === 'manual' ? (
+                    <ManualTransactionDialog
+                      accounts={accounts}
+                      categories={categories}
+                      transaction={transaction}
+                      compact
+                    />
+                  ) : null}
                 </Stack>
               </TableCell>
             </TableRow>
