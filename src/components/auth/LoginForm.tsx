@@ -132,7 +132,7 @@ export default function LoginForm({ supabaseConfigured, initialError = null }: L
         </Button>
 
         <Typography variant="body2" color="text.secondary" align="center">
-          Access is invite-only. Add users from the Supabase dashboard.
+          Access is invite-only. Ask a household owner to invite your email.
         </Typography>
       </Stack>
     </Paper>

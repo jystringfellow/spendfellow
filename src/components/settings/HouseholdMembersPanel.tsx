@@ -54,6 +54,7 @@ export default function HouseholdMembersPanel() {
   const [message, setMessage] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [revokingId, setRevokingId] = useState<string | null>(null);
+  const [removingMemberId, setRemovingMemberId] = useState<string | null>(null);
 
   const loadHouseholdAccess = useCallback(async () => {
     const response = await fetch('/api/household-invitations', { cache: 'no-store' });
@@ -111,6 +112,31 @@ export default function HouseholdMembersPanel() {
     }
 
     setMessage('Invitation revoked.');
+    await loadHouseholdAccess();
+  }
+
+  async function removeMember(member: MemberSummary) {
+    const memberLabel = member.full_name || member.email;
+    if (!window.confirm(`Remove ${memberLabel} from this household? Their sign-in account will not be deleted.`)) {
+      return;
+    }
+
+    setError(null);
+    setMessage(null);
+    setRemovingMemberId(member.user_id);
+
+    const response = await fetch(`/api/household-members/${encodeURIComponent(member.user_id)}`, {
+      method: 'DELETE',
+    });
+    const result = (await response.json()) as InviteResponse;
+    setRemovingMemberId(null);
+
+    if (!response.ok) {
+      setError(result.error ?? 'Unable to remove the household member.');
+      return;
+    }
+
+    setMessage(`${memberLabel} was removed from the household.`);
     await loadHouseholdAccess();
   }
 
@@ -178,7 +204,19 @@ export default function HouseholdMembersPanel() {
                           </Typography>
                         ) : null}
                       </Box>
-                      <Chip size="small" variant="outlined" label={member.role} />
+                      <Stack direction="row" spacing={1} alignItems="center">
+                        <Chip size="small" variant="outlined" label={member.role} />
+                        {data.household?.role === 'owner' && member.role === 'member' ? (
+                          <Button
+                            color="error"
+                            size="small"
+                            disabled={removingMemberId === member.user_id}
+                            onClick={() => void removeMember(member)}
+                          >
+                            {removingMemberId === member.user_id ? 'Removing…' : 'Remove'}
+                          </Button>
+                        ) : null}
+                      </Stack>
                     </Box>
                   ))}
                 </Stack>
