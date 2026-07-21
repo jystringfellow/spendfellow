@@ -9,7 +9,6 @@ import {
   AccountBalance as AccountBalanceIcon,
   Receipt as ReceiptIcon,
   Category as CategoryIcon,
-  Assessment as AssessmentIcon,
   Tune as TuneIcon,
   DarkMode as DarkModeIcon,
   LightMode as LightModeIcon,
@@ -22,7 +21,6 @@ const navItems = [
   { label: 'Transactions', path: '/transactions', icon: ReceiptIcon },
   { label: 'Budgets', path: '/budgets', icon: CategoryIcon },
   { label: 'Settings', path: '/settings', icon: TuneIcon },
-  { label: 'Reports', path: '/reports', icon: AssessmentIcon },
 ];
 
 export default function Navigation() {
