@@ -142,7 +142,7 @@ export async function POST(request: NextRequest) {
   }
 
   const serviceSupabase = createServiceSupabaseClient();
-  const { data: existingProfile, error: profileError } = await serviceSupabase
+  const { data: profileData, error: profileError } = await serviceSupabase
     .from('users')
     .select('id')
     .eq('email', email)
@@ -151,6 +151,8 @@ export async function POST(request: NextRequest) {
   if (profileError) {
     return NextResponse.json({ error: profileError.message }, { status: 500 });
   }
+
+  let existingProfile = profileData as { id: string } | null;
 
   if (existingProfile) {
     const { data: existingMemberships, error: existingMemberError } = await serviceSupabase
@@ -168,6 +170,32 @@ export async function POST(request: NextRequest) {
 
     if (existingMemberships && existingMemberships.length > 0) {
       return NextResponse.json({ error: 'That account already belongs to another household.' }, { status: 409 });
+    }
+
+    const { data: authUserData, error: authUserError } = await serviceSupabase.auth.admin.getUserById(existingProfile.id);
+    const authUserIsMissing =
+      !authUserData.user &&
+      (authUserError?.status === 404 || authUserError?.code === 'user_not_found' || /not found/i.test(authUserError?.message ?? ''));
+
+    if (authUserError && !authUserIsMissing) {
+      return NextResponse.json({ error: `Unable to verify the invited account: ${authUserError.message}` }, { status: 500 });
+    }
+
+    if (authUserIsMissing) {
+      // Preserve any historical rows owned by this profile while freeing the real
+      // email address for the replacement Auth user created by the new invite.
+      const archivedEmail = `removed-${existingProfile.id}@users.invalid`;
+      const { error: archiveError } = await serviceSupabase
+        .from('users')
+        .update({ email: archivedEmail, updated_at: new Date().toISOString() })
+        .eq('id', existingProfile.id)
+        .eq('email', email);
+
+      if (archiveError) {
+        return NextResponse.json({ error: `Unable to reset the deleted account: ${archiveError.message}` }, { status: 500 });
+      }
+
+      existingProfile = null;
     }
   }
 
