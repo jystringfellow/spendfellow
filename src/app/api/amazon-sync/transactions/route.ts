@@ -104,10 +104,9 @@ export async function POST(request: NextRequest) {
       }>
     ).map(getTransactionIdentity)
   );
-  const transaction_statuses = rows.map((row) => ({
-    orderId: row.order_id,
-    existing: existingTransactionIdentities.has(getTransactionIdentity(row)),
-  }));
+  const existingTransactionCount = rows.filter((row) =>
+    existingTransactionIdentities.has(getTransactionIdentity(row))
+  ).length;
 
   if (rows.length > 0) {
     const { error } = await serviceSupabase.from('amazon_payment_transactions').upsert(rows, {
@@ -132,7 +131,29 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: existingOrderError.message }, { status: 500 });
   }
 
+  const { data: existingItemRows, error: existingItemError } =
+    seenOrderIds.length > 0
+      ? await serviceSupabase
+          .from('amazon_order_items')
+          .select('order_id')
+          .eq('household_id', session.household_id)
+          .in('order_id', seenOrderIds)
+      : { data: [], error: null };
+
+  if (existingItemError) {
+    return NextResponse.json({ error: existingItemError.message }, { status: 500 });
+  }
+
+  const orderIdsWithItems = new Set(
+    ((existingItemRows ?? []) as Array<{ order_id: string }>).map((row) => row.order_id)
+  );
+
   const importedOrderIds = new Set(
+    ((existingOrderRows ?? []) as Array<{ order_id: string; details_imported_at: string | null }>)
+      .filter((row) => row.details_imported_at && orderIdsWithItems.has(row.order_id))
+      .map((row) => row.order_id)
+  );
+  const attemptedOrderIds = new Set(
     ((existingOrderRows ?? []) as Array<{ order_id: string; details_imported_at: string | null }>)
       .filter((row) => row.details_imported_at)
       .map((row) => row.order_id)
@@ -144,6 +165,11 @@ export async function POST(request: NextRequest) {
       return {
         orderId,
         orderDetailUrl: source?.order_detail_url ?? null,
+        reason: payload.forceReindex
+          ? 'force_reindex'
+          : attemptedOrderIds.has(orderId)
+            ? 'missing_item_details'
+            : 'not_imported',
       };
     });
 
@@ -151,8 +177,9 @@ export async function POST(request: NextRequest) {
     imported_count: rows.length,
     parsed_count: parsedRows.length,
     duplicate_count: parsedRows.length - rows.length,
-    existing_transaction_count: transaction_statuses.filter((transaction) => transaction.existing).length,
-    transaction_statuses,
+    existing_transaction_count: existingTransactionCount,
+    complete_order_count: importedOrderIds.size,
+    incomplete_order_count: seenOrderIds.filter((orderId) => !importedOrderIds.has(orderId)).length,
     needed_orders,
     stop: rows.length === 0,
     cutoff_date: session.cutoff_date,

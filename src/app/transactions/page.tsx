@@ -13,6 +13,8 @@ import {
 import Link from 'next/link';
 import CategorizationModeButton from '@/components/transactions/CategorizationModeButton';
 import TransactionsTable, { AmazonTransactionMatch, EditableTransactionRow } from '@/components/transactions/TransactionsTable';
+import ManualTransactionDialog, { type ManualTransactionAccountOption } from '@/components/transactions/ManualTransactionDialog';
+import type { CreditCardPaymentLinkSummary } from '@/components/transactions/CreditCardPaymentLinkButton';
 import { getCurrentHousehold } from '@/lib/households';
 import { createServerSupabaseClient } from '@/lib/supabaseServer';
 import type { AmazonOrder, AmazonOrderItem, AmazonPaymentTransaction, Category, Tag, TransactionTag } from '@/types/database';
@@ -154,7 +156,7 @@ export default async function TransactionsPage({ searchParams }: TransactionsPag
   let transactionsQuery = household
     ? supabase
         .from('transactions')
-        .select('*, accounts(name)', { count: 'exact' })
+        .select('*, accounts(name, type, source)', { count: 'exact' })
         .eq('household_id', household.id)
     : null;
 
@@ -194,19 +196,19 @@ export default async function TransactionsPage({ searchParams }: TransactionsPag
         pagedTransactionsQuery ?? Promise.resolve({ data: [], count: 0 }),
         supabase
           .from('transactions')
-          .select('*, accounts(name)')
+          .select('*, accounts(name, type, source)')
           .eq('household_id', household.id)
           .is('category_id', null)
           .order('date', { ascending: true }),
         supabase
           .from('categories')
-          .select('id, name')
+          .select('id, name, is_income')
           .eq('household_id', household.id)
           .eq('is_group', false)
           .order('sort_order', { ascending: true })
           .order('name', { ascending: true }),
         supabase.from('tags').select('id, name, color').eq('household_id', household.id).order('name'),
-        supabase.from('accounts').select('id, name').eq('household_id', household.id).order('name'),
+        supabase.from('accounts').select('id, name, type, source').eq('household_id', household.id).eq('is_active', true).order('name'),
       ])
     : [
         { data: [], count: 0 },
@@ -254,17 +256,91 @@ export default async function TransactionsPage({ searchParams }: TransactionsPag
       transaction_split_count: splitCountByTransactionId.get(transaction.id) ?? 0,
     }))
     .filter((transaction) => transaction.transaction_split_count === 0) as EditableTransactionRow[];
-  const categories = (categoryRows ?? []) as Pick<Category, 'id' | 'name'>[];
+  const categories = (categoryRows ?? []) as Pick<Category, 'id' | 'name' | 'is_income'>[];
   const tags = (tagRows ?? []) as Pick<Tag, 'id' | 'name' | 'color'>[];
-  const accountOptions = (accountRows ?? []) as { id: string; name: string }[];
+  const accountOptions = (accountRows ?? []) as ManualTransactionAccountOption[];
   const resultStart = totalTransactionCount === 0 ? 0 : rangeFrom + 1;
   const resultEnd = Math.min(totalTransactionCount, rangeFrom + transactions.length);
 
+  const loadedTransactionIds = Array.from(
+    new Set([...transactions.map((transaction) => transaction.id), ...uncategorizedTransactions.map((transaction) => transaction.id)])
+  );
+  const { data: paymentLinkRows } =
+    household && loadedTransactionIds.length > 0
+      ? await supabase
+          .from('credit_card_payment_links')
+          .select('id, checking_transaction_id, credit_transaction_id')
+          .eq('household_id', household.id)
+          .or(
+            `checking_transaction_id.in.(${loadedTransactionIds.join(',')}),credit_transaction_id.in.(${loadedTransactionIds.join(',')})`
+          )
+      : { data: [] };
+  const paymentLinks = (paymentLinkRows ?? []) as Array<{
+    id: string;
+    checking_transaction_id: string;
+    credit_transaction_id: string;
+  }>;
+  const linkedTransactionIds = Array.from(
+    new Set(paymentLinks.flatMap((link) => [link.checking_transaction_id, link.credit_transaction_id]))
+  );
+  const { data: linkedTransactionRows } =
+    household && linkedTransactionIds.length > 0
+      ? await supabase
+          .from('transactions')
+          .select('id, date, amount_cents, description, merchant_name, accounts(name)')
+          .eq('household_id', household.id)
+          .in('id', linkedTransactionIds)
+      : { data: [] };
+  const linkedTransactionById = new Map(
+    ((linkedTransactionRows ?? []) as unknown as Array<{
+      id: string;
+      date: string;
+      amount_cents: number;
+      description: string;
+      merchant_name: string | null;
+      accounts: { name: string } | null;
+    }>).map((transaction) => [transaction.id, transaction])
+  );
+  const paymentLinkByTransactionId = new Map<string, CreditCardPaymentLinkSummary>();
+  paymentLinks.forEach((link) => {
+    const checkingTransaction = linkedTransactionById.get(link.checking_transaction_id);
+    const creditTransaction = linkedTransactionById.get(link.credit_transaction_id);
+    if (!checkingTransaction || !creditTransaction) {
+      return;
+    }
+
+    paymentLinkByTransactionId.set(link.checking_transaction_id, {
+      id: link.id,
+      counterpart: {
+        ...creditTransaction,
+        account_name: creditTransaction.accounts?.name ?? 'Unknown account',
+      },
+    });
+    paymentLinkByTransactionId.set(link.credit_transaction_id, {
+      id: link.id,
+      counterpart: {
+        ...checkingTransaction,
+        account_name: checkingTransaction.accounts?.name ?? 'Unknown account',
+      },
+    });
+  });
+  const transactionsWithPaymentLinks = transactions.map((transaction) => ({
+    ...transaction,
+    credit_card_payment_link: paymentLinkByTransactionId.get(transaction.id) ?? null,
+  }));
+  const uncategorizedTransactionsWithoutPaymentLinks = uncategorizedTransactions.filter(
+    (transaction) => !paymentLinkByTransactionId.has(transaction.id)
+  );
+
   const amazonMatchByTransactionId = new Map<string, AmazonTransactionMatch>();
-  if (household && uncategorizedTransactions.length > 0) {
-    const dates = uncategorizedTransactions.map((transaction) => transaction.date).sort();
+  if (household && uncategorizedTransactionsWithoutPaymentLinks.length > 0) {
+    const dates = uncategorizedTransactionsWithoutPaymentLinks.map((transaction) => transaction.date).sort();
     const amountCandidates = Array.from(
-      new Set(uncategorizedTransactions.flatMap((transaction) => getAmazonMatchAmountCandidates(transaction.amount_cents)))
+      new Set(
+        uncategorizedTransactionsWithoutPaymentLinks.flatMap((transaction) =>
+          getAmazonMatchAmountCandidates(transaction.amount_cents)
+        )
+      )
     );
     const startDate = addDays(dates[0], -5);
     const endDate = addDays(dates[dates.length - 1], 5);
@@ -298,7 +374,7 @@ export default async function TransactionsPage({ searchParams }: TransactionsPag
       itemsByOrderId.set(item.order_id, [...(itemsByOrderId.get(item.order_id) ?? []), item]);
     });
 
-    uncategorizedTransactions.forEach((transaction) => {
+    uncategorizedTransactionsWithoutPaymentLinks.forEach((transaction) => {
       const exactLinkedPayment = amazonPayments.find((payment) => payment.plaid_transaction_id === transaction.id);
       const amountCandidatesForTransaction = new Set(getAmazonMatchAmountCandidates(transaction.amount_cents));
       const candidatePayments = amazonPayments
@@ -321,7 +397,7 @@ export default async function TransactionsPage({ searchParams }: TransactionsPag
     });
   }
 
-  const uncategorizedTransactionsWithAmazonMatches = uncategorizedTransactions.map((transaction) => ({
+  const uncategorizedTransactionsWithAmazonMatches = uncategorizedTransactionsWithoutPaymentLinks.map((transaction) => ({
     ...transaction,
     amazon_match: amazonMatchByTransactionId.get(transaction.id) ?? null,
   }));
@@ -340,6 +416,7 @@ export default async function TransactionsPage({ searchParams }: TransactionsPag
           </Box>
           {household ? (
             <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1.5} alignItems={{ xs: 'stretch', sm: 'flex-start' }}>
+              <ManualTransactionDialog accounts={accountOptions} categories={categories} />
               <CategorizationModeButton
                 transactions={uncategorizedTransactionsWithAmazonMatches}
                 categories={categories}
@@ -400,7 +477,12 @@ export default async function TransactionsPage({ searchParams }: TransactionsPag
           <Divider />
           {transactions.length > 0 ? (
             <>
-              <TransactionsTable transactions={transactions} categories={categories} tags={tags} />
+              <TransactionsTable
+                transactions={transactionsWithPaymentLinks}
+                categories={categories}
+                tags={tags}
+                accounts={accountOptions}
+              />
               <Stack direction="row" spacing={1} justifyContent="space-between" alignItems="center" sx={{ p: 2 }}>
                 <Button
                   component={Link}

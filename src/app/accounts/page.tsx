@@ -19,6 +19,7 @@ import {
 import Link from 'next/link';
 import AccountBalanceCategorySelect from '@/components/accounts/AccountBalanceCategorySelect';
 import AccountNameEditor from '@/components/accounts/AccountNameEditor';
+import ManualAccountDialog from '@/components/accounts/ManualAccountDialog';
 import {
   CollapsibleSection,
   LinkedInstitutionCard,
@@ -122,7 +123,11 @@ function getAccountsForItem(accounts: Account[], item: PlaidItemSummary): Accoun
 function getOtherAccounts(accounts: Account[], items: PlaidItemSummary[]): Account[] {
   const itemKeys = new Set(items.map((item) => `${item.plaid_environment ?? 'unknown'}:${item.plaid_item_id}`));
 
-  return accounts.filter((account) => !itemKeys.has(`${account.plaid_environment ?? 'unknown'}:${account.plaid_item_id ?? ''}`));
+  return accounts.filter(
+    (account) =>
+      account.source !== 'manual' &&
+      !itemKeys.has(`${account.plaid_environment ?? 'unknown'}:${account.plaid_item_id ?? ''}`)
+  );
 }
 
 function getBalanceCategorySummaries(accounts: Account[]) {
@@ -218,6 +223,7 @@ export default async function AccountsPage() {
     (run) => run.plaid_item_id
   );
   const balanceCategorySummaries = getBalanceCategorySummaries(accounts);
+  const manualAccounts = accounts.filter((account) => account.source === 'manual');
   const otherAccounts = getOtherAccounts(accounts, items);
   const activeItems = items.filter((item) => item.status === 'active');
   const inactiveItems = items.filter((item) => item.status !== 'active');
@@ -231,11 +237,12 @@ export default async function AccountsPage() {
               Accounts
             </Typography>
             <Typography variant="body1" color="text.secondary">
-              Connect financial institutions and review the account balances imported from Plaid.
+              Connect financial institutions and manage balances imported from Plaid or tracked manually.
             </Typography>
           </Box>
           {household ? (
             <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1.5} alignItems={{ xs: 'stretch', sm: 'flex-start' }}>
+              <ManualAccountDialog />
               <RefreshAccountsButton />
               <PlaidLinkButton />
             </Stack>
@@ -273,6 +280,51 @@ export default async function AccountsPage() {
             </Box>
 
             <Stack spacing={2}>
+              {manualAccounts.length > 0 ? (
+                <Paper sx={{ overflow: 'hidden' }}>
+                  <Box sx={{ p: 2.5 }}>
+                    <Typography variant="h6">Manual accounts</Typography>
+                    <Typography variant="body2" color="text.secondary">
+                      Balances update as you add, edit, or delete manual transactions.
+                    </Typography>
+                  </Box>
+                  <Divider />
+                  <TableContainer>
+                    <Table size="small" sx={{ minWidth: 680 }}>
+                      <TableHead>
+                        <TableRow>
+                          <TableCell>Account</TableCell>
+                          <TableCell align="right">Balance</TableCell>
+                          <TableCell>Budget Balance</TableCell>
+                        </TableRow>
+                      </TableHead>
+                      <TableBody>
+                        {manualAccounts.map((account) => (
+                          <TableRow key={account.id}>
+                            <TableCell>
+                              <Stack spacing={0.5}>
+                                <AccountNameEditor accountId={account.id} name={account.name} officialName={null} />
+                                <Chip size="small" variant="outlined" label="Manual cash" sx={{ alignSelf: 'flex-start' }} />
+                              </Stack>
+                            </TableCell>
+                            <TableCell align="right">
+                              {formatCurrency(account.current_balance_cents ?? 0, account.currency_code)}
+                            </TableCell>
+                            <TableCell>
+                              <AccountBalanceCategorySelect
+                                accountId={account.id}
+                                value={account.balance_category}
+                                inferredValue={inferAccountBalanceCategory(account)}
+                              />
+                            </TableCell>
+                          </TableRow>
+                        ))}
+                      </TableBody>
+                    </Table>
+                  </TableContainer>
+                </Paper>
+              ) : null}
+
               <Box>
                 <Typography variant="h6">Linked institutions</Typography>
                 <Typography variant="body2" color="text.secondary">
