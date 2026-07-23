@@ -530,6 +530,7 @@ export async function BudgetSettingsContent({ searchParams, embedded = false, tr
                       <TableCell>Category</TableCell>
                       <TableCell align="right">Monthly Budget</TableCell>
                       <TableCell align="right">Effective From</TableCell>
+                      <TableCell align="right">Rollover</TableCell>
                       <TableCell align="right">Action</TableCell>
                     </TableRow>
                   </TableHead>
@@ -565,6 +566,7 @@ export async function BudgetSettingsContent({ searchParams, embedded = false, tr
                             {group.target_percent === null ? '' : `Target ${group.target_percent}%`}
                           </TableCell>
                           <TableCell />
+                          <TableCell />
                         </TableRow>,
                         ...groupCategories.map((category) => {
                           const resolvedAmount = resolveCategoryBudgetAmount(
@@ -584,6 +586,13 @@ export async function BudgetSettingsContent({ searchParams, embedded = false, tr
                               </TableCell>
                               <TableCell align="right">{getMonthLabel(resolvedAmount.effective_start_month)}</TableCell>
                               <TableCell align="right">
+                                {category.rollover_enabled ? (
+                                  <Chip size="small" color="success" label="Carries forward" />
+                                ) : (
+                                  'Monthly'
+                                )}
+                              </TableCell>
+                              <TableCell align="right">
                                 <CategoryDialogButton
                                   mode="edit"
                                   action={updateCategorySettings}
@@ -597,6 +606,8 @@ export async function BudgetSettingsContent({ searchParams, embedded = false, tr
                                     name: category.name,
                                     parent_category_id: category.parent_category_id,
                                     amount_cents: resolvedAmount.amount_cents,
+                                    rollover_enabled: category.rollover_enabled,
+                                    rollover_start_date: category.rollover_start_date,
                                   }}
                                 />
                               </TableCell>

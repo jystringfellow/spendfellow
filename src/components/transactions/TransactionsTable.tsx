@@ -23,6 +23,9 @@ import CheckIcon from '@mui/icons-material/Check';
 import CallSplitIcon from '@mui/icons-material/CallSplit';
 import { formatCurrency } from '@/lib/money';
 import CreditCardPaymentLinkButton, { type CreditCardPaymentLinkSummary } from './CreditCardPaymentLinkButton';
+import FunMoneyAllocationButton, {
+  type FunMoneyAllocationSummary,
+} from './FunMoneyAllocationButton';
 import ManualTransactionDialog, { type ManualTransactionAccountOption } from './ManualTransactionDialog';
 import TagAutocomplete from './TagAutocomplete';
 import type { Category, Tag, Transaction } from '@/types/database';
@@ -37,6 +40,7 @@ export interface EditableTransactionRow extends Transaction {
   transaction_tag_ids: string[];
   transaction_split_count: number;
   credit_card_payment_link?: CreditCardPaymentLinkSummary | null;
+  fun_money_allocations: FunMoneyAllocationSummary[];
 }
 
 export interface AmazonTransactionMatch {
@@ -68,7 +72,10 @@ export interface AmazonOrderItemMatch {
 
 interface TransactionsTableProps {
   transactions: EditableTransactionRow[];
-  categories: Pick<Category, 'id' | 'name' | 'is_income'>[];
+  categories: Pick<
+    Category,
+    'id' | 'name' | 'is_income' | 'rollover_enabled' | 'rollover_start_date'
+  >[];
   tags: Pick<Tag, 'id' | 'name' | 'color'>[];
   accounts: ManualTransactionAccountOption[];
 }
@@ -293,6 +300,19 @@ export default function TransactionsTable({ transactions, categories, tags, acco
                       !transaction.pending &&
                       ((transaction.accounts?.type === 'depository' && transaction.amount_cents > 0) ||
                         (transaction.accounts?.type === 'credit' && transaction.amount_cents < 0))
+                    }
+                  />
+                  <FunMoneyAllocationButton
+                    transactionId={transaction.id}
+                    transactionDate={transaction.date}
+                    transactionAmountCents={transaction.amount_cents}
+                    transactionDescription={transaction.merchant_name ?? transaction.description}
+                    categories={categories}
+                    allocations={transaction.fun_money_allocations}
+                    eligible={
+                      !transaction.pending &&
+                      transaction.amount_cents < 0 &&
+                      !transaction.credit_card_payment_link
                     }
                   />
                 </Stack>

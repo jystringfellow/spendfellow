@@ -187,7 +187,10 @@ interface CategoryDialogButtonProps {
   year: number;
   startMonth: number;
   groups: GroupOption[];
-  category?: Pick<Category, 'id' | 'name' | 'parent_category_id'> & { amount_cents: number };
+  category?: Pick<
+    Category,
+    'id' | 'name' | 'parent_category_id' | 'rollover_enabled' | 'rollover_start_date'
+  > & { amount_cents: number };
 }
 
 export function CategoryDialogButton({
@@ -229,6 +232,27 @@ export function CategoryDialogButton({
           defaultValue={centsToDollars(category?.amount_cents ?? 0).toFixed(2)}
           inputProps={{ inputMode: 'decimal' }}
           required
+        />
+        <FormControlLabel
+          control={
+            <Checkbox
+              name="rolloverEnabled"
+              size="small"
+              defaultChecked={category?.rollover_enabled ?? false}
+            />
+          }
+          label="Carry unused balance forward month to month"
+        />
+        <TextField
+          name="rolloverStartDate"
+          label="Rollover starts"
+          type="date"
+          size="small"
+          defaultValue={
+            category?.rollover_start_date ??
+            `${year}-${String(startMonth).padStart(2, '0')}-01`
+          }
+          InputLabelProps={{ shrink: true }}
         />
         <TextField select name="startMonth" label="Effective from" size="small" defaultValue={startMonth}>
           {monthOptions.map((month) => (

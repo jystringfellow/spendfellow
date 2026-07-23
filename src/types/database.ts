@@ -180,8 +180,33 @@ export interface Category {
   target_percent: number | null;
   is_group: boolean;
   default_monthly_budget_cents: number;
+  rollover_enabled: boolean;
+  rollover_start_date: string | null;
   is_income: boolean;
   sort_order: number | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export type CategoryBalanceAdjustmentKind =
+  | 'income_allocation'
+  | 'gift'
+  | 'opening_balance'
+  | 'correction'
+  | 'other';
+
+export interface CategoryBalanceAdjustment {
+  id: string;
+  household_id: string;
+  category_id: string;
+  source_transaction_id: string | null;
+  effective_date: string;
+  amount_cents: number;
+  kind: CategoryBalanceAdjustmentKind;
+  status: 'pending' | 'posted' | 'void';
+  description: string;
+  notes: string | null;
+  created_by: string;
   created_at: string;
   updated_at: string;
 }
@@ -399,6 +424,10 @@ export interface BudgetVsActual {
 export type NewTransaction = Omit<Transaction, 'id' | 'created_at' | 'updated_at'>;
 export type NewBudget = Omit<Budget, 'id' | 'created_at' | 'updated_at'>;
 export type NewCategory = Omit<Category, 'id' | 'created_at' | 'updated_at'>;
+export type NewCategoryBalanceAdjustment = Omit<
+  CategoryBalanceAdjustment,
+  'id' | 'created_at' | 'updated_at'
+>;
 export type NewAccount = Omit<Account, 'id' | 'created_at' | 'updated_at'>;
 export type NewRecurringValue = Omit<RecurringValue, 'id' | 'created_at' | 'updated_at'>;
 export type NewRecurringValueDependency = Omit<RecurringValueDependency, 'created_at'>;

@@ -15,6 +15,7 @@ import CategorizationModeButton from '@/components/transactions/CategorizationMo
 import TransactionsTable, { AmazonTransactionMatch, EditableTransactionRow } from '@/components/transactions/TransactionsTable';
 import ManualTransactionDialog, { type ManualTransactionAccountOption } from '@/components/transactions/ManualTransactionDialog';
 import type { CreditCardPaymentLinkSummary } from '@/components/transactions/CreditCardPaymentLinkButton';
+import type { FunMoneyAllocationSummary } from '@/components/transactions/FunMoneyAllocationButton';
 import { getCurrentHousehold } from '@/lib/households';
 import { createServerSupabaseClient } from '@/lib/supabaseServer';
 import type { AmazonOrder, AmazonOrderItem, AmazonPaymentTransaction, Category, Tag, TransactionTag } from '@/types/database';
@@ -202,7 +203,7 @@ export default async function TransactionsPage({ searchParams }: TransactionsPag
           .order('date', { ascending: true }),
         supabase
           .from('categories')
-          .select('id, name, is_income')
+          .select('id, name, is_income, rollover_enabled, rollover_start_date')
           .eq('household_id', household.id)
           .eq('is_group', false)
           .order('sort_order', { ascending: true })
@@ -248,15 +249,20 @@ export default async function TransactionsPage({ searchParams }: TransactionsPag
     ...transaction,
     transaction_tag_ids: tagIdsByTransactionId.get(transaction.id) ?? [],
     transaction_split_count: splitCountByTransactionId.get(transaction.id) ?? 0,
+    fun_money_allocations: [],
   })) as EditableTransactionRow[];
   const uncategorizedTransactions = (uncategorizedRows ?? [])
     .map((transaction) => ({
       ...transaction,
       transaction_tag_ids: tagIdsByTransactionId.get(transaction.id) ?? [],
       transaction_split_count: splitCountByTransactionId.get(transaction.id) ?? 0,
+      fun_money_allocations: [],
     }))
     .filter((transaction) => transaction.transaction_split_count === 0) as EditableTransactionRow[];
-  const categories = (categoryRows ?? []) as Pick<Category, 'id' | 'name' | 'is_income'>[];
+  const categories = (categoryRows ?? []) as Pick<
+    Category,
+    'id' | 'name' | 'is_income' | 'rollover_enabled' | 'rollover_start_date'
+  >[];
   const tags = (tagRows ?? []) as Pick<Tag, 'id' | 'name' | 'color'>[];
   const accountOptions = (accountRows ?? []) as ManualTransactionAccountOption[];
   const resultStart = totalTransactionCount === 0 ? 0 : rangeFrom + 1;
@@ -265,6 +271,26 @@ export default async function TransactionsPage({ searchParams }: TransactionsPag
   const loadedTransactionIds = Array.from(
     new Set([...transactions.map((transaction) => transaction.id), ...uncategorizedTransactions.map((transaction) => transaction.id)])
   );
+  const { data: funMoneyAllocationRows } =
+    household && loadedTransactionIds.length > 0
+      ? await supabase
+          .from('category_balance_adjustments')
+          .select('id, category_id, amount_cents, effective_date, description, source_transaction_id')
+          .eq('household_id', household.id)
+          .in('source_transaction_id', loadedTransactionIds)
+          .eq('status', 'posted')
+      : { data: [] };
+  const funMoneyAllocationsByTransactionId = new Map<string, FunMoneyAllocationSummary[]>();
+  (
+    (funMoneyAllocationRows ?? []) as Array<
+      FunMoneyAllocationSummary & { source_transaction_id: string }
+    >
+  ).forEach((allocation) => {
+    funMoneyAllocationsByTransactionId.set(allocation.source_transaction_id, [
+      ...(funMoneyAllocationsByTransactionId.get(allocation.source_transaction_id) ?? []),
+      allocation,
+    ]);
+  });
   const { data: paymentLinkRows } =
     household && loadedTransactionIds.length > 0
       ? await supabase
@@ -327,6 +353,7 @@ export default async function TransactionsPage({ searchParams }: TransactionsPag
   const transactionsWithPaymentLinks = transactions.map((transaction) => ({
     ...transaction,
     credit_card_payment_link: paymentLinkByTransactionId.get(transaction.id) ?? null,
+    fun_money_allocations: funMoneyAllocationsByTransactionId.get(transaction.id) ?? [],
   }));
   const uncategorizedTransactionsWithoutPaymentLinks = uncategorizedTransactions.filter(
     (transaction) => !paymentLinkByTransactionId.has(transaction.id)
