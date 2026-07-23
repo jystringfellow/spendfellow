@@ -17,16 +17,23 @@ import {
   Typography,
 } from '@mui/material';
 import { getAccountBalanceCategory } from '@/lib/accountBalanceCategories';
+import {
+  calculateRolloverCategoryBalance,
+  type CategoryBalanceActivity,
+  type RolloverCategoryBalance,
+} from '@/lib/categoryBalances';
 import { resolveCategoryLayout } from '@/lib/categoryLayouts';
 import { resolveCategoryBudgetAmount } from '@/lib/constantPeriods';
 import { getCurrentHousehold } from '@/lib/households';
 import { formatCurrency } from '@/lib/money';
 import { createServerSupabaseClient } from '@/lib/supabaseServer';
+import FunMoneyAdjustmentDialog from '@/components/budgets/FunMoneyAdjustmentDialog';
 import type {
   Account,
   AccountBalanceSnapshot,
   BudgetActualLine,
   Category,
+  CategoryBalanceAdjustment,
   CategoryBudgetPeriod,
   CategoryLayoutPeriod,
   MonthlySpending,
@@ -581,7 +588,7 @@ export default async function BudgetsPage({ searchParams }: BudgetsPageProps) {
           .from('category_budget_periods')
           .select('*')
           .eq('household_id', household.id)
-          .eq('year', selectedYear),
+          .lte('year', selectedYear),
         supabase
           .from('monthly_spending_by_category')
           .select('*')
@@ -613,6 +620,57 @@ export default async function BudgetsPage({ searchParams }: BudgetsPageProps) {
   const categories = (categoryRows ?? []) as Category[];
   const categoryLayouts = (categoryLayoutRows ?? []) as CategoryLayoutPeriod[];
   const categoryBudgetPeriods = (categoryBudgetPeriodRows ?? []) as CategoryBudgetPeriod[];
+  const rolloverCategories = categories.filter(
+    (category) =>
+      category.rollover_enabled &&
+      category.rollover_start_date &&
+      category.rollover_start_date <= endDate
+  );
+  const rolloverCategoryIds = rolloverCategories.map((category) => category.id);
+  const earliestRolloverDate = rolloverCategories
+    .map((category) => category.rollover_start_date as string)
+    .sort()[0];
+  const [{ data: rolloverActivityRows }, { data: balanceAdjustmentRows }] =
+    household && rolloverCategoryIds.length > 0 && earliestRolloverDate
+      ? await Promise.all([
+          supabase
+            .from('budget_actual_lines')
+            .select('category_id, date, amount_cents')
+            .eq('household_id', household.id)
+            .eq('pending', false)
+            .in('category_id', rolloverCategoryIds)
+            .gte('date', earliestRolloverDate)
+            .lte('date', endDate),
+          supabase
+            .from('category_balance_adjustments')
+            .select('*')
+            .eq('household_id', household.id)
+            .in('category_id', rolloverCategoryIds)
+            .eq('status', 'posted')
+            .gte('effective_date', earliestRolloverDate)
+            .lte('effective_date', endDate)
+            .order('effective_date', { ascending: true }),
+        ])
+      : [{ data: [] }, { data: [] }];
+  const rolloverActivity = (rolloverActivityRows ?? []) as CategoryBalanceActivity[];
+  const balanceAdjustments = (balanceAdjustmentRows ?? []) as CategoryBalanceAdjustment[];
+  const rolloverBalanceByCategoryId = new Map<string, RolloverCategoryBalance>(
+    rolloverCategories.map((category) => [
+      category.id,
+      calculateRolloverCategoryBalance(
+        category,
+        categoryBudgetPeriods,
+        rolloverActivity,
+        balanceAdjustments,
+        selectedYear,
+        selectedMonth
+      ),
+    ])
+  );
+  const currentMonthAdjustments = balanceAdjustments.filter(
+    (adjustment) =>
+      adjustment.effective_date >= startDate && adjustment.effective_date <= endDate
+  );
   const accountSummaries = (accountRows ?? []) as Account[];
   const balanceSnapshots = (balanceSnapshotRows ?? []) as AccountBalanceSnapshot[];
   const balanceSnapshotByAccountId = getClosestBalanceSnapshots(
@@ -803,6 +861,14 @@ export default async function BudgetsPage({ searchParams }: BudgetsPageProps) {
             </Typography>
           </Box>
           <Stack direction="row" spacing={1} alignItems="center">
+            {selectedSheet !== 'summary' ? (
+              <FunMoneyAdjustmentDialog
+                categories={rolloverCategories}
+                adjustments={currentMonthAdjustments}
+                monthStart={startDate}
+                monthEnd={endDate}
+              />
+            ) : null}
             <Button component={Link} href={`/budgets?year=${previousYear}&sheet=${selectedSheet}`} variant="outlined" size="small">
               {previousYear}
             </Button>
@@ -1208,6 +1274,7 @@ export default async function BudgetsPage({ searchParams }: BudgetsPageProps) {
                       {section.categories.map((category) => (
                         <TableCell key={category.id} sx={{ ...getCellBorderSx(), bgcolor: section.color }}>
                           {getSheetCategoryName(category, section)}
+                          {rolloverBalanceByCategoryId.get(category.id)?.active ? ' ↻' : ''}
                         </TableCell>
                       ))}
                     </Fragment>
@@ -1225,13 +1292,39 @@ export default async function BudgetsPage({ searchParams }: BudgetsPageProps) {
                           {formatCurrency(bigWantsCapacityCents)}
                         </TableCell>
                       ) : (
-                        section.categories.map((category) => (
-                          <TableCell key={category.id} align="right" sx={{ ...getCellBorderSx(), bgcolor: '#d9d9d9' }}>
-                            {section.role === 'expense'
-                              ? formatCurrency(getCategoryBudgetCents(category, categoryBudgetPeriods, selectedYear, selectedMonth))
-                              : null}
-                          </TableCell>
-                        ))
+                        section.categories.map((category) => {
+                          const rolloverBalance = rolloverBalanceByCategoryId.get(category.id);
+                          const displayedBudgetCents =
+                            rolloverBalance?.active
+                              ? rolloverBalance.availableBeforeSpendCents
+                              : getCategoryBudgetCents(
+                                  category,
+                                  categoryBudgetPeriods,
+                                  selectedYear,
+                                  selectedMonth
+                                );
+
+                          return (
+                            <TableCell key={category.id} align="right" sx={{ ...getCellBorderSx(), bgcolor: '#d9d9d9' }}>
+                              {section.role === 'expense' ? (
+                                rolloverBalance?.active ? (
+                                  <Tooltip
+                                    title={
+                                      <Box sx={{ whiteSpace: 'pre-line' }}>
+                                        {`Opening balance: ${formatCurrency(rolloverBalance.openingBalanceCents)}\nMonthly allotment: ${formatCurrency(rolloverBalance.monthlyAllotmentCents)}\nCredits: ${formatCurrency(rolloverBalance.adjustmentsThisMonthCents)}`}
+                                      </Box>
+                                    }
+                                    arrow
+                                  >
+                                    <Box sx={{ cursor: 'default' }}>{formatCurrency(displayedBudgetCents)}</Box>
+                                  </Tooltip>
+                                ) : (
+                                  formatCurrency(displayedBudgetCents)
+                                )
+                              ) : null}
+                            </TableCell>
+                          );
+                        })
                       )}
                       {section.id === needsSection?.id ? (
                         <TableCell align="right" sx={{ ...getCellBorderSx(), bgcolor: '#d9d9d9', fontWeight: 700 }}>
@@ -1312,7 +1405,14 @@ export default async function BudgetsPage({ searchParams }: BudgetsPageProps) {
                           0
                         );
                         const remaining =
-                          getCategoryBudgetCents(category, categoryBudgetPeriods, selectedYear, selectedMonth) - total;
+                          rolloverBalanceByCategoryId.get(category.id)?.active
+                            ? rolloverBalanceByCategoryId.get(category.id)?.endingBalanceCents ?? 0
+                            : getCategoryBudgetCents(
+                                category,
+                                categoryBudgetPeriods,
+                                selectedYear,
+                                selectedMonth
+                              ) - total;
                         const categoryIndex = section.categories.findIndex((sectionCategory) => sectionCategory.id === category.id);
                         const calculatedValue =
                           section.role === 'income' && categoryIndex === 0

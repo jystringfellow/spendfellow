@@ -197,6 +197,14 @@ export async function POST(request: NextRequest) {
           parent_category_id: groupByName.get(category.groupName)?.id ?? null,
           group_key: category.groupKey,
           default_monthly_budget_cents: category.defaultMonthlyBudgetCents,
+          rollover_enabled:
+            category.groupKey.toLowerCase() === 'wants' &&
+            !category.name.toLowerCase().includes('entertainment'),
+          rollover_start_date:
+            category.groupKey.toLowerCase() === 'wants' &&
+            !category.name.toLowerCase().includes('entertainment')
+              ? `${yearValue}-01-01`
+              : null,
           is_income: category.isIncome,
           is_group: false,
           sort_order: 1000 + index * 10,

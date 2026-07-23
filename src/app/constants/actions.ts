@@ -88,6 +88,26 @@ function getRequiredYear(formData: FormData): number {
   return year;
 }
 
+function getRolloverSettings(formData: FormData): {
+  rollover_enabled: boolean;
+  rollover_start_date: string | null;
+} {
+  const rolloverEnabled = formData.get('rolloverEnabled') === 'on';
+  const rolloverStartDate = getOptionalString(formData, 'rolloverStartDate');
+
+  if (
+    rolloverEnabled &&
+    (!rolloverStartDate || !/^\d{4}-\d{2}-\d{2}$/.test(rolloverStartDate))
+  ) {
+    throw new Error('Choose a valid rollover start date');
+  }
+
+  return {
+    rollover_enabled: rolloverEnabled,
+    rollover_start_date: rolloverEnabled ? rolloverStartDate : null,
+  };
+}
+
 async function getCurrentUserId(): Promise<string> {
   const supabase = createServerSupabaseClient();
   const {
@@ -118,10 +138,24 @@ export async function seedWorkbookConstants() {
   }
 
   const supabase = createServerSupabaseClient();
+  const rolloverStartDate = `${new Date().getFullYear()}-01-01`;
   const { error } = await supabase.rpc('seed_workbook_constants');
 
   if (error) {
     throw new Error(error.message);
+  }
+
+  const { error: rolloverError } = await supabase
+    .from('categories')
+    .update({
+      rollover_enabled: true,
+      rollover_start_date: rolloverStartDate,
+    })
+    .eq('group_key', 'wants')
+    .neq('name', 'Entertainment');
+
+  if (rolloverError) {
+    throw new Error(rolloverError.message);
   }
 
   revalidateSettingsPaths();
@@ -135,6 +169,7 @@ export async function updateCategorySettings(formData: FormData) {
   const year = getRequiredYear(formData);
   const startMonth = getRequiredMonth(formData);
   const amountCents = parseCurrencyToCents(getRequiredString(formData, 'amount'));
+  const rolloverSettings = getRolloverSettings(formData);
   const supabase = createServerSupabaseClient();
 
   const { data: parentCategory, error: parentError } = await supabase
@@ -174,6 +209,7 @@ export async function updateCategorySettings(formData: FormData) {
       group_key: parentCategory.group_key,
       is_income: Boolean(parentCategory.is_income),
       default_monthly_budget_cents: amountCents,
+      ...rolloverSettings,
     })
     .eq('id', categoryId)
     .eq('household_id', householdId)
@@ -540,6 +576,7 @@ export async function createCategory(formData: FormData) {
   const year = getRequiredYear(formData);
   const startMonth = getRequiredMonth(formData);
   const amountCents = parseCurrencyToCents(getRequiredString(formData, 'amount'));
+  const rolloverSettings = getRolloverSettings(formData);
   const userId = await getCurrentUserId();
   const supabase = createServerSupabaseClient();
 
@@ -581,6 +618,7 @@ export async function createCategory(formData: FormData) {
       parent_category_id: parentCategoryId,
       group_key: parentCategory.group_key,
       default_monthly_budget_cents: amountCents,
+      ...rolloverSettings,
       is_income: Boolean(parentCategory.is_income),
       sort_order: nextSortOrder,
     })
