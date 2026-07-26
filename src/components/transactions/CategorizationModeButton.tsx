@@ -1,6 +1,6 @@
 'use client';
 
-import { KeyboardEvent, useMemo, useState } from 'react';
+import { KeyboardEvent, useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import {
   Alert,
@@ -30,18 +30,25 @@ import PlaylistAddCheckIcon from '@mui/icons-material/PlaylistAddCheck';
 import { findUniqueAmazonRefundItemIds } from '@/lib/amazonRefundItems';
 import { allocateAmazonSplitAmounts } from '@/lib/amazonSplitAllocation';
 import { formatCurrency, parseCurrencyToCents } from '@/lib/money';
-import type { Category, Tag } from '@/types/database';
+import type { BudgetTransactionGroup, Category, Tag } from '@/types/database';
 import TagAutocomplete from './TagAutocomplete';
 import CreditCardPaymentLinkButton from './CreditCardPaymentLinkButton';
+import FunMoneyAllocationButton from './FunMoneyAllocationButton';
 import type { EditableTransactionRow } from './TransactionsTable';
 
 interface CategorizationModeButtonProps {
   transactions: EditableTransactionRow[];
-  categories: Pick<Category, 'id' | 'name' | 'is_income'>[];
+  categories: Pick<
+    Category,
+    'id' | 'name' | 'is_income' | 'rollover_enabled' | 'rollover_start_date'
+  >[];
   tags: Pick<Tag, 'id' | 'name' | 'color'>[];
+  budgetGroups: Pick<BudgetTransactionGroup, 'id' | 'name'>[];
 }
 
 interface Draft {
+  budgetGroupId: string;
+  budgetGroupName: string;
   categoryId: string;
   notes: string;
   tagIds: string[];
@@ -49,6 +56,8 @@ interface Draft {
   isSplit: boolean;
   splits: SplitDraft[];
 }
+
+const CREATE_BUDGET_GROUP_VALUE = '__create_budget_group__';
 
 interface SplitDraft {
   amount: string;
@@ -70,6 +79,8 @@ function createDraft(transaction: EditableTransactionRow | undefined): Draft {
     : undefined;
 
   return {
+    budgetGroupId: transaction?.budget_group?.id ?? '',
+    budgetGroupName: '',
     categoryId: transaction?.category_id ?? '',
     notes: transaction?.notes ?? '',
     tagIds: transaction?.transaction_tag_ids ?? [],
@@ -295,9 +306,15 @@ function getSingleAmazonItem(items: NonNullable<EditableTransactionRow['amazon_m
   return items.length === 1 ? items[0] : null;
 }
 
-export default function CategorizationModeButton({ transactions, categories, tags }: CategorizationModeButtonProps) {
+export default function CategorizationModeButton({
+  transactions,
+  categories,
+  tags,
+  budgetGroups,
+}: CategorizationModeButtonProps) {
   const router = useRouter();
   const [tagOptions, setTagOptions] = useState(tags);
+  const [budgetGroupOptions, setBudgetGroupOptions] = useState(budgetGroups);
   const [isOpen, setIsOpen] = useState(false);
   const [currentIndex, setCurrentIndex] = useState(0);
   const [completedIds, setCompletedIds] = useState<Set<string>>(new Set());
@@ -350,6 +367,10 @@ export default function CategorizationModeButton({ transactions, categories, tag
   const progressCount = completedIds.size;
   const totalCount = transactions.length;
 
+  useEffect(() => {
+    setBudgetGroupOptions(budgetGroups);
+  }, [budgetGroups]);
+
   function openDialog() {
     setCurrentIndex(0);
     setCompletedIds(new Set());
@@ -388,6 +409,11 @@ export default function CategorizationModeButton({ transactions, categories, tag
 
     if (!draft.isSplit && !draft.categoryId) {
       setError('Choose a category before saving.');
+      return;
+    }
+
+    if (draft.budgetGroupId === CREATE_BUDGET_GROUP_VALUE && !draft.budgetGroupName.trim()) {
+      setError('Enter a name for the new budget group.');
       return;
     }
 
@@ -439,6 +465,12 @@ export default function CategorizationModeButton({ transactions, categories, tag
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
+        budget_group_id:
+          draft.budgetGroupId && draft.budgetGroupId !== CREATE_BUDGET_GROUP_VALUE
+            ? draft.budgetGroupId
+            : null,
+        budget_group_name:
+          draft.budgetGroupId === CREATE_BUDGET_GROUP_VALUE ? draft.budgetGroupName : null,
         category_id: draft.isSplit ? null : draft.categoryId || null,
         notes: draft.isSplit ? null : draft.notes,
         tag_ids: draft.isSplit ? [] : draft.tagIds,
@@ -446,7 +478,11 @@ export default function CategorizationModeButton({ transactions, categories, tag
         splits: splitPayload,
       }),
     });
-    const data = (await response.json()) as { error?: string; tags?: Pick<Tag, 'id' | 'name' | 'color'>[] };
+    const data = (await response.json()) as {
+      budget_group?: Pick<BudgetTransactionGroup, 'id' | 'name'> | null;
+      error?: string;
+      tags?: Pick<Tag, 'id' | 'name' | 'color'>[];
+    };
 
     setIsSaving(false);
 
@@ -460,6 +496,14 @@ export default function CategorizationModeButton({ transactions, categories, tag
         const tagById = new Map(currentTags.map((tag) => [tag.id, tag]));
         data.tags?.forEach((tag) => tagById.set(tag.id, tag));
         return Array.from(tagById.values()).sort((a, b) => a.name.localeCompare(b.name));
+      });
+    }
+
+    if (data.budget_group) {
+      setBudgetGroupOptions((currentGroups) => {
+        const groupById = new Map(currentGroups.map((group) => [group.id, group]));
+        groupById.set(data.budget_group!.id, data.budget_group!);
+        return Array.from(groupById.values()).sort((left, right) => left.name.localeCompare(right.name));
       });
     }
 
@@ -580,6 +624,20 @@ export default function CategorizationModeButton({ transactions, categories, tag
                     (currentTransaction.accounts?.type === 'credit' && currentTransaction.amount_cents < 0))
                 }
                 onLinked={completeCurrentAfterPaymentLink}
+              />
+
+              <FunMoneyAllocationButton
+                transactionId={currentTransaction.id}
+                transactionDate={currentTransaction.date}
+                transactionAmountCents={currentTransaction.amount_cents}
+                transactionDescription={currentTransaction.merchant_name ?? currentTransaction.description}
+                categories={categories}
+                allocations={currentTransaction.fun_money_allocations}
+                eligible={
+                  !currentTransaction.pending &&
+                  currentTransaction.amount_cents < 0 &&
+                  !currentTransaction.credit_card_payment_link
+                }
               />
 
               {currentTransaction.amazon_match ? (
@@ -781,6 +839,51 @@ export default function CategorizationModeButton({ transactions, categories, tag
                         </MenuItem>
                       ))}
                     </Select>
+
+                    <Box>
+                      <Select
+                        size="small"
+                        fullWidth
+                        displayEmpty
+                        value={draft.budgetGroupId}
+                        onChange={(event) =>
+                          setDraft((current) => ({
+                            ...current,
+                            budgetGroupId: event.target.value,
+                            budgetGroupName:
+                              event.target.value === CREATE_BUDGET_GROUP_VALUE
+                                ? current.budgetGroupName
+                                : '',
+                          }))
+                        }
+                      >
+                        <MenuItem value="">No budget group</MenuItem>
+                        {budgetGroupOptions.map((group) => (
+                          <MenuItem key={group.id} value={group.id}>
+                            {group.name}
+                          </MenuItem>
+                        ))}
+                        <Divider />
+                        <MenuItem value={CREATE_BUDGET_GROUP_VALUE}>Create a new budget group…</MenuItem>
+                      </Select>
+                      <Typography variant="caption" color="text.secondary">
+                        Linked transactions share one cell in the monthly budget.
+                      </Typography>
+                    </Box>
+
+                    {draft.budgetGroupId === CREATE_BUDGET_GROUP_VALUE ? (
+                      <TextField
+                        size="small"
+                        fullWidth
+                        autoFocus
+                        label="New budget group name"
+                        value={draft.budgetGroupName}
+                        onChange={(event) =>
+                          setDraft((current) => ({ ...current, budgetGroupName: event.target.value }))
+                        }
+                        inputProps={{ maxLength: 80 }}
+                      />
+                    ) : null}
 
                     <TagAutocomplete
                       tags={tagOptions}

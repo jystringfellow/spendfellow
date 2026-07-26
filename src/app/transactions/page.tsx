@@ -18,7 +18,16 @@ import type { CreditCardPaymentLinkSummary } from '@/components/transactions/Cre
 import type { FunMoneyAllocationSummary } from '@/components/transactions/FunMoneyAllocationButton';
 import { getCurrentHousehold } from '@/lib/households';
 import { createServerSupabaseClient } from '@/lib/supabaseServer';
-import type { AmazonOrder, AmazonOrderItem, AmazonPaymentTransaction, Category, Tag, TransactionTag } from '@/types/database';
+import type {
+  AmazonOrder,
+  AmazonOrderItem,
+  AmazonPaymentTransaction,
+  BudgetTransactionGroup,
+  BudgetTransactionGroupMember,
+  Category,
+  Tag,
+  TransactionTag,
+} from '@/types/database';
 
 const PAGE_SIZE = 50;
 const SORT_COLUMNS = ['date', 'amount_cents', 'merchant_name', 'description'] as const;
@@ -192,6 +201,7 @@ export default async function TransactionsPage({ searchParams }: TransactionsPag
     { data: categoryRows },
     { data: tagRows },
     { data: accountRows },
+    { data: budgetGroupRows },
   ] = household
     ? await Promise.all([
         pagedTransactionsQuery ?? Promise.resolve({ data: [], count: 0 }),
@@ -210,9 +220,15 @@ export default async function TransactionsPage({ searchParams }: TransactionsPag
           .order('name', { ascending: true }),
         supabase.from('tags').select('id, name, color').eq('household_id', household.id).order('name'),
         supabase.from('accounts').select('id, name, type, source').eq('household_id', household.id).eq('is_active', true).order('name'),
+        supabase
+          .from('budget_transaction_groups')
+          .select('*')
+          .eq('household_id', household.id)
+          .order('name', { ascending: true }),
       ])
     : [
         { data: [], count: 0 },
+        { data: [] },
         { data: [] },
         { data: [] },
         { data: [] },
@@ -270,6 +286,22 @@ export default async function TransactionsPage({ searchParams }: TransactionsPag
 
   const loadedTransactionIds = Array.from(
     new Set([...transactions.map((transaction) => transaction.id), ...uncategorizedTransactions.map((transaction) => transaction.id)])
+  );
+  const budgetGroups = (budgetGroupRows ?? []) as BudgetTransactionGroup[];
+  const { data: budgetGroupMemberRows } =
+    household && loadedTransactionIds.length > 0
+      ? await supabase
+          .from('budget_transaction_group_members')
+          .select('transaction_id, group_id, household_id, created_by, created_at')
+          .eq('household_id', household.id)
+          .in('transaction_id', loadedTransactionIds)
+      : { data: [] };
+  const budgetGroupById = new Map(budgetGroups.map((group) => [group.id, group]));
+  const budgetGroupIdByTransactionId = new Map(
+    ((budgetGroupMemberRows ?? []) as BudgetTransactionGroupMember[]).map((member) => [
+      member.transaction_id,
+      member.group_id,
+    ])
   );
   const { data: funMoneyAllocationRows } =
     household && loadedTransactionIds.length > 0
@@ -352,12 +384,17 @@ export default async function TransactionsPage({ searchParams }: TransactionsPag
   });
   const transactionsWithPaymentLinks = transactions.map((transaction) => ({
     ...transaction,
+    budget_group: budgetGroupById.get(budgetGroupIdByTransactionId.get(transaction.id) ?? '') ?? null,
     credit_card_payment_link: paymentLinkByTransactionId.get(transaction.id) ?? null,
     fun_money_allocations: funMoneyAllocationsByTransactionId.get(transaction.id) ?? [],
   }));
-  const uncategorizedTransactionsWithoutPaymentLinks = uncategorizedTransactions.filter(
-    (transaction) => !paymentLinkByTransactionId.has(transaction.id)
-  );
+  const uncategorizedTransactionsWithoutPaymentLinks = uncategorizedTransactions
+    .map((transaction) => ({
+      ...transaction,
+      budget_group: budgetGroupById.get(budgetGroupIdByTransactionId.get(transaction.id) ?? '') ?? null,
+      fun_money_allocations: funMoneyAllocationsByTransactionId.get(transaction.id) ?? [],
+    }))
+    .filter((transaction) => !paymentLinkByTransactionId.has(transaction.id));
 
   const amazonMatchByTransactionId = new Map<string, AmazonTransactionMatch>();
   if (household && uncategorizedTransactionsWithoutPaymentLinks.length > 0) {
@@ -448,6 +485,7 @@ export default async function TransactionsPage({ searchParams }: TransactionsPag
                 transactions={uncategorizedTransactionsWithAmazonMatches}
                 categories={categories}
                 tags={tags}
+                budgetGroups={budgetGroups}
               />
             </Stack>
           ) : null}
@@ -509,6 +547,7 @@ export default async function TransactionsPage({ searchParams }: TransactionsPag
                 categories={categories}
                 tags={tags}
                 accounts={accountOptions}
+                budgetGroups={budgetGroups}
               />
               <Stack direction="row" spacing={1} justifyContent="space-between" alignItems="center" sx={{ p: 2 }}>
                 <Button

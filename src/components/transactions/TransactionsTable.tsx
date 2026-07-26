@@ -4,8 +4,16 @@ import { useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import {
   Alert,
+  Box,
   Button,
+  Checkbox,
   Chip,
+  Dialog,
+  DialogActions,
+  DialogContent,
+  DialogTitle,
+  Divider,
+  FormControlLabel,
   MenuItem,
   Select,
   Stack,
@@ -28,7 +36,9 @@ import FunMoneyAllocationButton, {
 } from './FunMoneyAllocationButton';
 import ManualTransactionDialog, { type ManualTransactionAccountOption } from './ManualTransactionDialog';
 import TagAutocomplete from './TagAutocomplete';
-import type { Category, Tag, Transaction } from '@/types/database';
+import type { BudgetTransactionGroup, Category, Tag, Transaction } from '@/types/database';
+
+const CREATE_BUDGET_GROUP_VALUE = '__create_budget_group__';
 
 export interface EditableTransactionRow extends Transaction {
   accounts: {
@@ -41,6 +51,7 @@ export interface EditableTransactionRow extends Transaction {
   transaction_split_count: number;
   credit_card_payment_link?: CreditCardPaymentLinkSummary | null;
   fun_money_allocations: FunMoneyAllocationSummary[];
+  budget_group: Pick<BudgetTransactionGroup, 'id' | 'name'> | null;
 }
 
 export interface AmazonTransactionMatch {
@@ -78,9 +89,12 @@ interface TransactionsTableProps {
   >[];
   tags: Pick<Tag, 'id' | 'name' | 'color'>[];
   accounts: ManualTransactionAccountOption[];
+  budgetGroups: Pick<BudgetTransactionGroup, 'id' | 'name'>[];
 }
 
 interface RowDraft {
+  budgetGroupId: string;
+  budgetGroupName: string;
   categoryId: string;
   notes: string;
   tagIds: string[];
@@ -92,6 +106,8 @@ interface RowDraft {
 
 function createDraft(transaction: EditableTransactionRow): RowDraft {
   return {
+    budgetGroupId: transaction.budget_group?.id ?? '',
+    budgetGroupName: '',
     categoryId: transaction.category_id ?? '',
     notes: transaction.notes ?? '',
     tagIds: transaction.transaction_tag_ids,
@@ -102,9 +118,28 @@ function createDraft(transaction: EditableTransactionRow): RowDraft {
   };
 }
 
-export default function TransactionsTable({ transactions, categories, tags, accounts }: TransactionsTableProps) {
+export default function TransactionsTable({
+  transactions,
+  categories,
+  tags,
+  accounts,
+  budgetGroups,
+}: TransactionsTableProps) {
   const router = useRouter();
   const [tagOptions, setTagOptions] = useState(tags);
+  const [budgetGroupOptions, setBudgetGroupOptions] = useState(budgetGroups);
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [bulkEditorOpen, setBulkEditorOpen] = useState(false);
+  const [applyBulkCategory, setApplyBulkCategory] = useState(false);
+  const [bulkCategoryId, setBulkCategoryId] = useState('');
+  const [applyBulkTags, setApplyBulkTags] = useState(false);
+  const [bulkTagMode, setBulkTagMode] = useState<'add' | 'remove'>('add');
+  const [bulkTagIds, setBulkTagIds] = useState<string[]>([]);
+  const [applyBulkBudgetGroup, setApplyBulkBudgetGroup] = useState(false);
+  const [bulkBudgetGroupId, setBulkBudgetGroupId] = useState('');
+  const [bulkBudgetGroupName, setBulkBudgetGroupName] = useState('');
+  const [isBulkSaving, setIsBulkSaving] = useState(false);
+  const [bulkError, setBulkError] = useState<string | null>(null);
   const [drafts, setDrafts] = useState<Record<string, RowDraft>>(() =>
     Object.fromEntries(transactions.map((transaction) => [transaction.id, createDraft(transaction)]))
   );
@@ -113,6 +148,10 @@ export default function TransactionsTable({ transactions, categories, tags, acco
   useEffect(() => {
     setTagOptions(tags);
   }, [tags]);
+
+  useEffect(() => {
+    setBudgetGroupOptions(budgetGroups);
+  }, [budgetGroups]);
 
   useEffect(() => {
     setDrafts((currentDrafts) =>
@@ -126,6 +165,14 @@ export default function TransactionsTable({ transactions, categories, tags, acco
           return [transaction.id, createDraft(transaction)];
         })
       )
+    );
+    setSelectedIds(
+      (currentIds) =>
+        new Set(
+          [...currentIds].filter((transactionId) =>
+            transactions.some((transaction) => transaction.id === transactionId)
+          )
+        )
     );
   }, [transactions]);
 
@@ -151,19 +198,34 @@ export default function TransactionsTable({ transactions, categories, tags, acco
       delete savedTimersRef.current[transactionId];
     }
 
+    if (draft.budgetGroupId === CREATE_BUDGET_GROUP_VALUE && !draft.budgetGroupName.trim()) {
+      updateDraft(transactionId, { error: 'Enter a name for the new budget group.' });
+      return;
+    }
+
     updateDraft(transactionId, { isSaving: true, error: null, saved: false });
 
     const response = await fetch(`/api/transactions/${transactionId}`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
+        budget_group_id:
+          draft.budgetGroupId && draft.budgetGroupId !== CREATE_BUDGET_GROUP_VALUE
+            ? draft.budgetGroupId
+            : null,
+        budget_group_name:
+          draft.budgetGroupId === CREATE_BUDGET_GROUP_VALUE ? draft.budgetGroupName : null,
         category_id: draft.categoryId || null,
         notes: draft.notes,
         tag_ids: draft.tagIds,
         tag_names: draft.tagNames,
       }),
     });
-    const data = (await response.json()) as { error?: string; tags?: Pick<Tag, 'id' | 'name' | 'color'>[] };
+    const data = (await response.json()) as {
+      budget_group?: Pick<BudgetTransactionGroup, 'id' | 'name'> | null;
+      error?: string;
+      tags?: Pick<Tag, 'id' | 'name' | 'color'>[];
+    };
 
     if (!response.ok) {
       updateDraft(transactionId, { isSaving: false, error: data.error ?? 'Unable to save transaction.' });
@@ -182,15 +244,148 @@ export default function TransactionsTable({ transactions, categories, tags, acco
       });
     }
 
-    updateDraft(transactionId, { isSaving: false, error: null, saved: true });
+    if (data.budget_group) {
+      setBudgetGroupOptions((currentGroups) => {
+        const groupById = new Map(currentGroups.map((group) => [group.id, group]));
+        groupById.set(data.budget_group!.id, data.budget_group!);
+        return Array.from(groupById.values()).sort((left, right) => left.name.localeCompare(right.name));
+      });
+    }
+
+    updateDraft(transactionId, {
+      budgetGroupId: data.budget_group?.id ?? '',
+      budgetGroupName: '',
+      isSaving: false,
+      error: null,
+      saved: true,
+    });
     savedTimersRef.current[transactionId] = setTimeout(() => {
       updateDraft(transactionId, { saved: false });
       delete savedTimersRef.current[transactionId];
     }, 3_000);
 
-    if (draft.tagNames.length > 0) {
+    if (draft.tagNames.length > 0 || draft.budgetGroupId === CREATE_BUDGET_GROUP_VALUE) {
       router.refresh();
     }
+  }
+
+  function toggleSelected(transactionId: string) {
+    setSelectedIds((currentIds) => {
+      const nextIds = new Set(currentIds);
+      if (nextIds.has(transactionId)) {
+        nextIds.delete(transactionId);
+      } else {
+        nextIds.add(transactionId);
+      }
+      return nextIds;
+    });
+  }
+
+  function toggleAllSelected() {
+    setSelectedIds((currentIds) =>
+      currentIds.size === transactions.length ? new Set() : new Set(transactions.map((transaction) => transaction.id))
+    );
+  }
+
+  function openBulkEditor() {
+    setBulkError(null);
+    setBulkEditorOpen(true);
+  }
+
+  function closeBulkEditor() {
+    if (!isBulkSaving) {
+      setBulkEditorOpen(false);
+    }
+  }
+
+  async function applyBulkEdits() {
+    const transactionIds = [...selectedIds];
+    if (transactionIds.length === 0 || isBulkSaving) {
+      return;
+    }
+
+    if (!applyBulkCategory && !applyBulkTags && !applyBulkBudgetGroup) {
+      setBulkError('Choose at least one property to update.');
+      return;
+    }
+    if (applyBulkTags && bulkTagIds.length === 0) {
+      setBulkError('Choose at least one tag.');
+      return;
+    }
+    if (
+      applyBulkBudgetGroup &&
+      bulkBudgetGroupId === CREATE_BUDGET_GROUP_VALUE &&
+      !bulkBudgetGroupName.trim()
+    ) {
+      setBulkError('Enter a name for the new budget group.');
+      return;
+    }
+
+    setIsBulkSaving(true);
+    setBulkError(null);
+
+    const response = await fetch('/api/transactions/bulk', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        transaction_ids: transactionIds,
+        category: applyBulkCategory ? { category_id: bulkCategoryId || null } : undefined,
+        tags: applyBulkTags ? { mode: bulkTagMode, tag_ids: bulkTagIds } : undefined,
+        budget_group: applyBulkBudgetGroup
+          ? {
+              group_id:
+                bulkBudgetGroupId && bulkBudgetGroupId !== CREATE_BUDGET_GROUP_VALUE
+                  ? bulkBudgetGroupId
+                  : null,
+              group_name:
+                bulkBudgetGroupId === CREATE_BUDGET_GROUP_VALUE ? bulkBudgetGroupName : null,
+            }
+          : undefined,
+      }),
+    });
+    const data = (await response.json().catch(() => ({}))) as {
+      budget_group?: Pick<BudgetTransactionGroup, 'id' | 'name'> | null;
+      error?: string;
+    };
+
+    if (!response.ok) {
+      setIsBulkSaving(false);
+      setBulkError(data.error ?? 'Unable to update the selected transactions.');
+      return;
+    }
+
+    if (data.budget_group) {
+        setBudgetGroupOptions((currentGroups) => {
+          const groupById = new Map(currentGroups.map((group) => [group.id, group]));
+          groupById.set(data.budget_group!.id, data.budget_group!);
+          return Array.from(groupById.values()).sort((left, right) => left.name.localeCompare(right.name));
+        });
+    }
+
+    transactionIds.forEach((transactionId) => {
+      const currentDraft = drafts[transactionId];
+      const nextTagIds = applyBulkTags
+        ? bulkTagMode === 'add'
+          ? Array.from(new Set([...(currentDraft?.tagIds ?? []), ...bulkTagIds]))
+          : (currentDraft?.tagIds ?? []).filter((tagId) => !bulkTagIds.includes(tagId))
+        : currentDraft?.tagIds;
+      updateDraft(transactionId, {
+          categoryId: applyBulkCategory ? bulkCategoryId : currentDraft?.categoryId,
+          tagIds: nextTagIds,
+          budgetGroupId: applyBulkBudgetGroup ? data.budget_group?.id ?? '' : currentDraft?.budgetGroupId,
+          budgetGroupName: '',
+        });
+    });
+    setSelectedIds(new Set());
+    setBulkEditorOpen(false);
+    setApplyBulkCategory(false);
+    setApplyBulkTags(false);
+    setApplyBulkBudgetGroup(false);
+    setBulkTagIds([]);
+    setBulkBudgetGroupId('');
+    setBulkBudgetGroupName('');
+    setIsBulkSaving(false);
+    router.refresh();
   }
 
   if (transactions.length === 0) {
@@ -198,10 +393,189 @@ export default function TransactionsTable({ transactions, categories, tags, acco
   }
 
   return (
-    <TableContainer sx={{ maxWidth: '100%', overflowX: 'auto' }}>
-      <Table stickyHeader sx={{ minWidth: 1260, tableLayout: 'fixed' }}>
+    <>
+      <Box sx={{ px: 2, py: 1.5, bgcolor: 'grey.50', borderBottom: 1, borderColor: 'divider' }}>
+        <Stack direction={{ xs: 'column', md: 'row' }} spacing={1} alignItems={{ xs: 'stretch', md: 'center' }}>
+          <Typography variant="body2" sx={{ minWidth: 150 }}>
+            {selectedIds.size > 0 ? `${selectedIds.size} selected` : 'Select rows for bulk editing'}
+          </Typography>
+          <Button
+            variant="outlined"
+            disabled={selectedIds.size === 0}
+            onClick={openBulkEditor}
+          >
+            Bulk edit
+          </Button>
+          <Button
+            color="inherit"
+            disabled={selectedIds.size === 0}
+            onClick={() => setSelectedIds(new Set())}
+          >
+            Clear selection
+          </Button>
+        </Stack>
+      </Box>
+      <Dialog open={bulkEditorOpen} onClose={closeBulkEditor} fullWidth maxWidth="sm">
+        <DialogTitle>Bulk edit {selectedIds.size} transactions</DialogTitle>
+        <DialogContent dividers>
+          <Stack spacing={2.5}>
+            <Box>
+              <FormControlLabel
+                control={
+                  <Checkbox
+                    checked={applyBulkCategory}
+                    onChange={(event) => setApplyBulkCategory(event.target.checked)}
+                  />
+                }
+                label="Change category"
+              />
+              <Select
+                size="small"
+                fullWidth
+                displayEmpty
+                value={bulkCategoryId}
+                onChange={(event) => setBulkCategoryId(event.target.value)}
+                disabled={!applyBulkCategory || isBulkSaving}
+              >
+                <MenuItem value="">Uncategorized</MenuItem>
+                {categories.map((category) => (
+                  <MenuItem key={category.id} value={category.id}>
+                    {category.name}
+                  </MenuItem>
+                ))}
+              </Select>
+              <Typography variant="caption" color="text.secondary">
+                Split transactions cannot have their category changed in bulk.
+              </Typography>
+            </Box>
+
+            <Divider />
+
+            <Box>
+              <FormControlLabel
+                control={
+                  <Checkbox
+                    checked={applyBulkTags}
+                    onChange={(event) => setApplyBulkTags(event.target.checked)}
+                  />
+                }
+                label="Change tags"
+              />
+              <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1}>
+                <Select
+                  size="small"
+                  value={bulkTagMode}
+                  onChange={(event) => setBulkTagMode(event.target.value as 'add' | 'remove')}
+                  disabled={!applyBulkTags || isBulkSaving}
+                  sx={{ minWidth: 110 }}
+                >
+                  <MenuItem value="add">Add</MenuItem>
+                  <MenuItem value="remove">Remove</MenuItem>
+                </Select>
+                <Select
+                  size="small"
+                  multiple
+                  fullWidth
+                  displayEmpty
+                  value={bulkTagIds}
+                  onChange={(event) =>
+                    setBulkTagIds(
+                      typeof event.target.value === 'string'
+                        ? event.target.value.split(',')
+                        : event.target.value
+                    )
+                  }
+                  disabled={!applyBulkTags || isBulkSaving}
+                  renderValue={(selected) =>
+                    selected.length > 0
+                      ? selected
+                          .map((tagId) => tagOptions.find((tag) => tag.id === tagId)?.name ?? tagId)
+                          .join(', ')
+                      : 'Choose tags'
+                  }
+                >
+                  {tagOptions.map((tag) => (
+                    <MenuItem key={tag.id} value={tag.id}>
+                      <Checkbox checked={bulkTagIds.includes(tag.id)} />
+                      {tag.name}
+                    </MenuItem>
+                  ))}
+                </Select>
+              </Stack>
+            </Box>
+
+            <Divider />
+
+            <Box>
+              <FormControlLabel
+                control={
+                  <Checkbox
+                    checked={applyBulkBudgetGroup}
+                    onChange={(event) => setApplyBulkBudgetGroup(event.target.checked)}
+                  />
+                }
+                label="Change budget group"
+              />
+              <Select
+                size="small"
+                fullWidth
+                displayEmpty
+                value={bulkBudgetGroupId}
+                onChange={(event) => {
+                  setBulkBudgetGroupId(event.target.value);
+                  if (event.target.value !== CREATE_BUDGET_GROUP_VALUE) {
+                    setBulkBudgetGroupName('');
+                  }
+                }}
+                disabled={!applyBulkBudgetGroup || isBulkSaving}
+              >
+                <MenuItem value="">Remove budget group</MenuItem>
+                {budgetGroupOptions.map((group) => (
+                  <MenuItem key={group.id} value={group.id}>
+                    {group.name}
+                  </MenuItem>
+                ))}
+                <Divider />
+                <MenuItem value={CREATE_BUDGET_GROUP_VALUE}>Create a new budget group…</MenuItem>
+              </Select>
+              {applyBulkBudgetGroup && bulkBudgetGroupId === CREATE_BUDGET_GROUP_VALUE ? (
+                <TextField
+                  size="small"
+                  fullWidth
+                  label="New group name"
+                  value={bulkBudgetGroupName}
+                  onChange={(event) => setBulkBudgetGroupName(event.target.value)}
+                  inputProps={{ maxLength: 80 }}
+                  disabled={isBulkSaving}
+                  sx={{ mt: 1 }}
+                />
+              ) : null}
+            </Box>
+
+            {bulkError ? <Alert severity="error">{bulkError}</Alert> : null}
+          </Stack>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={closeBulkEditor} disabled={isBulkSaving}>
+            Cancel
+          </Button>
+          <Button variant="contained" onClick={() => void applyBulkEdits()} disabled={isBulkSaving}>
+            {isBulkSaving ? 'Applying…' : 'Apply changes'}
+          </Button>
+        </DialogActions>
+      </Dialog>
+      <TableContainer sx={{ maxWidth: '100%', overflowX: 'auto' }}>
+      <Table stickyHeader sx={{ minWidth: 1540, tableLayout: 'fixed' }}>
       <TableHead>
         <TableRow>
+          <TableCell padding="checkbox" sx={{ width: 52 }}>
+            <Checkbox
+              checked={selectedIds.size === transactions.length}
+              indeterminate={selectedIds.size > 0 && selectedIds.size < transactions.length}
+              onChange={toggleAllSelected}
+              inputProps={{ 'aria-label': 'Select all transactions on this page' }}
+            />
+          </TableCell>
           <TableCell sx={{ width: 112 }}>Date</TableCell>
           <TableCell sx={{ width: 280 }}>Description</TableCell>
           <TableCell sx={{ width: 160 }}>Account</TableCell>
@@ -209,6 +583,7 @@ export default function TransactionsTable({ transactions, categories, tags, acco
             Amount
           </TableCell>
           <TableCell sx={{ width: 210 }}>Category</TableCell>
+          <TableCell sx={{ width: 220 }}>Budget group</TableCell>
           <TableCell sx={{ width: 280 }}>Tags</TableCell>
           <TableCell sx={{ width: 105 }}>Status</TableCell>
           <TableCell sx={{ width: 260 }}>Notes</TableCell>
@@ -233,6 +608,13 @@ export default function TransactionsTable({ transactions, categories, tags, acco
           const draft = drafts[transaction.id] ?? createDraft(transaction);
           return (
             <TableRow key={transaction.id} hover>
+              <TableCell padding="checkbox">
+                <Checkbox
+                  checked={selectedIds.has(transaction.id)}
+                  onChange={() => toggleSelected(transaction.id)}
+                  inputProps={{ 'aria-label': `Select ${transaction.merchant_name ?? transaction.description}` }}
+                />
+              </TableCell>
               <TableCell sx={{ whiteSpace: 'nowrap' }}>{transaction.date}</TableCell>
               <TableCell>
                 <Stack spacing={0.25}>
@@ -276,6 +658,45 @@ export default function TransactionsTable({ transactions, categories, tags, acco
                     </MenuItem>
                   ))}
                 </Select>
+              </TableCell>
+              <TableCell>
+                <Stack spacing={0.75}>
+                  <Select
+                    size="small"
+                    fullWidth
+                    displayEmpty
+                    value={draft.budgetGroupId}
+                    onChange={(event) =>
+                      updateDraft(transaction.id, {
+                        budgetGroupId: event.target.value,
+                        budgetGroupName:
+                          event.target.value === CREATE_BUDGET_GROUP_VALUE
+                            ? draft.budgetGroupName
+                            : '',
+                      })
+                    }
+                  >
+                    <MenuItem value="">No group</MenuItem>
+                    {budgetGroupOptions.map((group) => (
+                      <MenuItem key={group.id} value={group.id}>
+                        {group.name}
+                      </MenuItem>
+                    ))}
+                    <Divider />
+                    <MenuItem value={CREATE_BUDGET_GROUP_VALUE}>Create new…</MenuItem>
+                  </Select>
+                  {draft.budgetGroupId === CREATE_BUDGET_GROUP_VALUE ? (
+                    <TextField
+                      size="small"
+                      value={draft.budgetGroupName}
+                      onChange={(event) =>
+                        updateDraft(transaction.id, { budgetGroupName: event.target.value })
+                      }
+                      placeholder="Group name"
+                      inputProps={{ maxLength: 80 }}
+                    />
+                  ) : null}
+                </Stack>
               </TableCell>
               <TableCell>
                 <TagAutocomplete
@@ -377,6 +798,7 @@ export default function TransactionsTable({ transactions, categories, tags, acco
         })}
       </TableBody>
       </Table>
-    </TableContainer>
+      </TableContainer>
+    </>
   );
 }
