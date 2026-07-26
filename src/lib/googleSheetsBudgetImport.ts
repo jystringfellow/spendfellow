@@ -73,9 +73,23 @@ export interface ParsedBudgetLine {
   sortOrder: number;
 }
 
+export interface ParsedBudgetCategory {
+  source_sheet: string;
+  year: number;
+  month: number;
+  categoryName: string;
+  groupName: string;
+  groupKey: string;
+  categoryColor: string;
+  isIncome: boolean;
+  defaultMonthlyBudgetCents: number;
+  sortOrder: number;
+}
+
 export interface ParsedBudgetWorkbook {
   sheets: ImportPreviewSheet[];
   linesBySheet: Map<string, ParsedBudgetLine[]>;
+  categoriesBySheet: Map<string, ParsedBudgetCategory[]>;
 }
 
 function asArray<T>(value: T | T[] | undefined): T[] {
@@ -376,13 +390,18 @@ function getDateFromComment(comment: string | null, year: number, fallbackMonth:
   return `${year}-${String(safeMonth).padStart(2, '0')}-${String(safeDay).padStart(2, '0')}`;
 }
 
-function getImportedLines(sheet: WorkbookSheet, worksheet: ParsedWorksheet, year: number): ParsedBudgetLine[] {
+function getImportedSheet(
+  sheet: WorkbookSheet,
+  worksheet: ParsedWorksheet,
+  year: number
+): { lines: ParsedBudgetLine[]; categories: ParsedBudgetCategory[] } {
   const month = getMonth(sheet.name);
   if (!month) {
-    return [];
+    return { lines: [], categories: [] };
   }
 
   const lines: ParsedBudgetLine[] = [];
+  const categories: ParsedBudgetCategory[] = [];
   const groupByColumn = new Map<number, string>();
   const headerMerges = worksheet.mergedRanges.filter((range) => range.startRow <= 4 && range.endRow >= 4);
 
@@ -429,6 +448,19 @@ function getImportedLines(sheet: WorkbookSheet, worksheet: ParsedWorksheet, year
       typeof worksheet.cells.get(`${entry.columnLabel}6`) === 'number'
         ? amountToCents(worksheet.cells.get(`${entry.columnLabel}6`) as number)
         : 0;
+    const category: ParsedBudgetCategory = {
+      source_sheet: sheet.name,
+      year,
+      month,
+      categoryName: entry.categoryName,
+      groupName: group.groupName,
+      groupKey: group.groupKey,
+      categoryColor: group.color,
+      isIncome: group.isIncome,
+      defaultMonthlyBudgetCents,
+      sortOrder: columnIndex * 10,
+    };
+    categories.push(category);
 
     for (let row = DATA_START_ROW; row <= DATA_END_ROW; row += 1) {
       const cell = `${entry.columnLabel}${row}`;
@@ -440,27 +472,18 @@ function getImportedLines(sheet: WorkbookSheet, worksheet: ParsedWorksheet, year
       const rawComment = worksheet.comments.get(cell)?.trim() || null;
       const description = rawComment?.split('\n').find((line) => line.trim())?.trim() ?? `${sheet.name} ${cell}`;
       lines.push({
-        source_sheet: sheet.name,
+        ...category,
         source_cell: cell,
-        year,
-        month,
         date: getDateFromComment(rawComment, year, month),
         amount_cents: amountToCents(amount),
         description,
         notes: rawComment,
         raw_comment: rawComment,
-        categoryName: entry.categoryName,
-        groupName: group.groupName,
-        groupKey: group.groupKey,
-        categoryColor: group.color,
-        isIncome: group.isIncome,
-        defaultMonthlyBudgetCents,
-        sortOrder: columnIndex * 10,
       });
     }
   });
 
-  return lines;
+  return { lines, categories };
 }
 
 export async function parseGoogleSheetsBudgetWorkbook(buffer: ArrayBuffer, year: number): Promise<ParsedBudgetWorkbook> {
@@ -469,18 +492,21 @@ export async function parseGoogleSheetsBudgetWorkbook(buffer: ArrayBuffer, year:
   const sheets = await getWorkbookSheets(zip);
   const previewSheets: ImportPreviewSheet[] = [];
   const linesBySheet = new Map<string, ParsedBudgetLine[]>();
+  const categoriesBySheet = new Map<string, ParsedBudgetCategory[]>();
 
   for (const sheet of sheets) {
     const worksheet = await parseWorksheet(zip, sheet, sharedStrings);
-    const lines = getImportedLines(sheet, worksheet, year);
-    const categories = Array.from(new Set(lines.map((line) => line.categoryName)));
+    const parsedSheet = getImportedSheet(sheet, worksheet, year);
+    const { lines } = parsedSheet;
+    const categories = Array.from(new Set(parsedSheet.categories.map((category) => category.categoryName)));
     const commentedLineCount = lines.filter((line) => Boolean(line.raw_comment)).length;
 
     linesBySheet.set(sheet.name, lines);
+    categoriesBySheet.set(sheet.name, parsedSheet.categories);
     previewSheets.push({
       name: sheet.name,
       month: getMonth(sheet.name),
-      importable: lines.length > 0,
+      importable: parsedSheet.categories.length > 0,
       lineCount: lines.length,
       commentedLineCount,
       categories,
@@ -496,5 +522,6 @@ export async function parseGoogleSheetsBudgetWorkbook(buffer: ArrayBuffer, year:
   return {
     sheets: previewSheets,
     linesBySheet,
+    categoriesBySheet,
   };
 }
