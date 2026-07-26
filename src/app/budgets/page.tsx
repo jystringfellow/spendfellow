@@ -246,6 +246,34 @@ function getCategorySections(categories: Category[], layoutPeriods: CategoryLayo
   return sections.map(({ order: _order, ...section }) => section);
 }
 
+function getYearCategorySections(sectionsByMonth: CategorySection[][]): CategorySection[] {
+  const sectionById = new Map<string, CategorySection>();
+  const seenCategoryIds = new Set<string>();
+
+  sectionsByMonth.forEach((monthSections) => {
+    monthSections.forEach((section) => {
+      const existingSection = sectionById.get(section.id);
+      if (!existingSection) {
+        sectionById.set(section.id, { ...section, categories: [] });
+      }
+
+      const unionSection = sectionById.get(section.id);
+      if (!unionSection) {
+        return;
+      }
+
+      section.categories.forEach((category) => {
+        if (!seenCategoryIds.has(category.id)) {
+          unionSection.categories.push(category);
+          seenCategoryIds.add(category.id);
+        }
+      });
+    });
+  });
+
+  return Array.from(sectionById.values()).filter((section) => section.categories.length > 0);
+}
+
 function getSheetCategoryName(category: Category, section: CategorySection): string {
   if (section.role === 'income' && category.name.toLowerCase() === 'income transfers') {
     return 'Transfers';
@@ -729,7 +757,12 @@ export default async function BudgetsPage({ searchParams }: BudgetsPageProps) {
   const balanceSummaryTotalCents = balanceSummaries.reduce((total, summary) => total + summary.balanceCents, 0);
   const balanceSummaryCellCount = balanceSummaries.length + 1;
   const spending = (spendingRows ?? []) as MonthlySpending[];
-  const sections = getCategorySections(categories, categoryLayouts, selectedYear, selectedMonth);
+  const selectedMonthSections = getCategorySections(categories, categoryLayouts, selectedYear, selectedMonth);
+  const sectionsByMonth = MONTHS.map((_monthName, monthIndex) =>
+    getCategorySections(categories, categoryLayouts, selectedYear, monthIndex + 1)
+  );
+  const yearSections = getYearCategorySections(sectionsByMonth);
+  const sections = selectedSheet === 'summary' ? yearSections : selectedMonthSections;
   const visibleCategories = sections.flatMap((section) => section.categories);
   const expenseSections = sections.filter((section) => section.role === 'expense');
   const incomeSections = sections.filter((section) => section.role === 'income');
@@ -851,31 +884,44 @@ export default async function BudgetsPage({ searchParams }: BudgetsPageProps) {
   );
   const monthlyRows = Math.max(MONTHLY_MIN_ROWS, longestMonthlyCategory + MONTHLY_TRAILING_ROWS);
   const incomeMonthTotals = MONTHS.map((_monthName, monthIndex) =>
-    incomeSections.reduce(
-      (total, section) => total + getSectionMonthTotal(section, spendingByCategoryMonth, monthIndex + 1),
-      0
-    )
+    sectionsByMonth[monthIndex]
+      .filter((section) => section.role === 'income')
+      .reduce(
+        (total, section) => total + getSectionMonthTotal(section, spendingByCategoryMonth, monthIndex + 1),
+        0
+      )
   );
   const savingsMonthTotals = MONTHS.map((_monthName, monthIndex) =>
-    savingsSections.reduce(
-      (total, section) => total + getSectionMonthTotal(section, spendingByCategoryMonth, monthIndex + 1),
-      0
-    )
+    sectionsByMonth[monthIndex]
+      .filter((section) => section.role === 'savings')
+      .reduce(
+        (total, section) => total + getSectionMonthTotal(section, spendingByCategoryMonth, monthIndex + 1),
+        0
+      )
   );
   const needsSummarySection = sections.find((section) => section.name.toLowerCase().includes('needs'));
   const wantsSummarySection = sections.find((section) => section.name.toLowerCase().includes('wants') && !section.name.toLowerCase().includes('big'));
   const bigWantsSummarySection = sections.find((section) => section.name.toLowerCase().includes('big'));
-  const needsMonthTotals = MONTHS.map((_monthName, monthIndex) =>
-    needsSummarySection ? getSectionMonthTotal(needsSummarySection, spendingByCategoryMonth, monthIndex + 1) : 0
-  );
-  const wantsMonthTotals = MONTHS.map((_monthName, monthIndex) =>
-    wantsSummarySection ? getSectionMonthTotal(wantsSummarySection, spendingByCategoryMonth, monthIndex + 1) : 0
-  );
-  const bigWantsMonthTotals = MONTHS.map((_monthName, monthIndex) =>
-    bigWantsSummarySection
-      ? getSectionMonthSignedTotal(bigWantsSummarySection, spendingByCategoryMonth, monthIndex + 1)
-      : 0
-  );
+  const needsMonthTotals = MONTHS.map((_monthName, monthIndex) => {
+    const section = sectionsByMonth[monthIndex].find((candidate) =>
+      candidate.name.toLowerCase().includes('needs')
+    );
+    return section ? getSectionMonthTotal(section, spendingByCategoryMonth, monthIndex + 1) : 0;
+  });
+  const wantsMonthTotals = MONTHS.map((_monthName, monthIndex) => {
+    const section = sectionsByMonth[monthIndex].find(
+      (candidate) =>
+        candidate.name.toLowerCase().includes('wants') &&
+        !candidate.name.toLowerCase().includes('big')
+    );
+    return section ? getSectionMonthTotal(section, spendingByCategoryMonth, monthIndex + 1) : 0;
+  });
+  const bigWantsMonthTotals = MONTHS.map((_monthName, monthIndex) => {
+    const section = sectionsByMonth[monthIndex].find((candidate) =>
+      candidate.name.toLowerCase().includes('big')
+    );
+    return section ? getSectionMonthSignedTotal(section, spendingByCategoryMonth, monthIndex + 1) : 0;
+  });
   const totalSpentNonBigMonthTotals = MONTHS.map(
     (_monthName, monthIndex) => -needsMonthTotals[monthIndex] - wantsMonthTotals[monthIndex]
   );
@@ -1011,11 +1057,18 @@ export default async function BudgetsPage({ searchParams }: BudgetsPageProps) {
                 ))}
                 {summaryExpenseSections.map((section) => {
                   const isBigWants = section.id === bigWantsSummarySection?.id;
-                  const sectionMonthTotals = MONTHS.map((_month, monthIndex) =>
-                    isBigWants
-                      ? getSectionMonthSignedTotal(section, spendingByCategoryMonth, monthIndex + 1)
-                      : getSectionMonthTotal(section, spendingByCategoryMonth, monthIndex + 1)
-                  );
+                  const sectionMonthTotals = MONTHS.map((_month, monthIndex) => {
+                    const monthSection = sectionsByMonth[monthIndex].find(
+                      (candidate) => candidate.id === section.id
+                    );
+                    if (!monthSection) {
+                      return 0;
+                    }
+
+                    return isBigWants
+                      ? getSectionMonthSignedTotal(monthSection, spendingByCategoryMonth, monthIndex + 1)
+                      : getSectionMonthTotal(monthSection, spendingByCategoryMonth, monthIndex + 1);
+                  });
                   const sectionTotal = sectionMonthTotals.reduce((total, monthTotal) => total + monthTotal, 0);
                   const formatSectionAmount = (amountCents: number) =>
                     isBigWants ? formatCurrency(amountCents) : formatSheetAmount(amountCents, section.role);

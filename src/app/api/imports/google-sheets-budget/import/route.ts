@@ -1,8 +1,15 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { parseGoogleSheetsBudgetWorkbook, type ParsedBudgetLine } from '@/lib/googleSheetsBudgetImport';
+import { resolveCategoryLayout } from '@/lib/categoryLayouts';
+import { resolveCategoryBudgetAmount } from '@/lib/constantPeriods';
+import {
+  parseGoogleSheetsBudgetWorkbook,
+  type ParsedBudgetCategory,
+  type ParsedBudgetLine,
+} from '@/lib/googleSheetsBudgetImport';
 import { getCurrentHousehold } from '@/lib/households';
+import { getImportRestorationMonths } from '@/lib/importPeriods';
 import { createServerSupabaseClient } from '@/lib/supabaseServer';
-import type { Category } from '@/types/database';
+import type { Category, CategoryBudgetPeriod, CategoryLayoutPeriod } from '@/types/database';
 
 interface CategoryInput {
   name: string;
@@ -14,8 +21,13 @@ interface CategoryInput {
   sortOrder: number;
 }
 
-function getCategoryDbName(line: Pick<ParsedBudgetLine, 'categoryName' | 'groupName'>, duplicateCategoryNames: Set<string>): string {
-  return duplicateCategoryNames.has(line.categoryName) ? `${line.groupName} ${line.categoryName}` : line.categoryName;
+function getCategoryDbName(
+  category: Pick<ParsedBudgetCategory, 'categoryName' | 'groupName'>,
+  duplicateCategoryNames: Set<string>
+): string {
+  return duplicateCategoryNames.has(category.categoryName)
+    ? `${category.groupName} ${category.categoryName}`
+    : category.categoryName;
 }
 
 function parseSelectedSheets(value: FormDataEntryValue | null): string[] {
@@ -47,6 +59,17 @@ function uniqueByName<T extends { name: string }>(values: T[]): T[] {
     }
   });
   return Array.from(byName.values());
+}
+
+function uniqueByKey<T>(values: T[], getKey: (value: T) => string): T[] {
+  const byKey = new Map<string, T>();
+  values.forEach((value) => {
+    const key = getKey(value);
+    if (!byKey.has(key)) {
+      byKey.set(key, value);
+    }
+  });
+  return Array.from(byKey.values());
 }
 
 export async function POST(request: NextRequest) {
@@ -85,17 +108,25 @@ export async function POST(request: NextRequest) {
 
   try {
     const workbook = await parseGoogleSheetsBudgetWorkbook(await file.arrayBuffer(), yearValue);
-    const selectedLineGroups = selectedSheets.map((sheetName) => workbook.linesBySheet.get(sheetName) ?? []);
-    const lines = selectedLineGroups.flat();
+    const lines = selectedSheets.flatMap((sheetName) => workbook.linesBySheet.get(sheetName) ?? []);
+    const importedCategories = selectedSheets.flatMap(
+      (sheetName) => workbook.categoriesBySheet.get(sheetName) ?? []
+    );
 
-    if (lines.length === 0) {
-      return NextResponse.json({ error: 'The selected sheets do not contain importable budget lines.' }, { status: 400 });
+    if (importedCategories.length === 0) {
+      return NextResponse.json(
+        { error: 'The selected sheets do not contain importable budget categories.' },
+        { status: 400 }
+      );
     }
 
     const groupsByCategoryName = new Map<string, Set<string>>();
-    lines.forEach((line) => {
-      groupsByCategoryName.set(line.categoryName, groupsByCategoryName.get(line.categoryName) ?? new Set());
-      groupsByCategoryName.get(line.categoryName)?.add(line.groupName);
+    importedCategories.forEach((category) => {
+      groupsByCategoryName.set(
+        category.categoryName,
+        groupsByCategoryName.get(category.categoryName) ?? new Set()
+      );
+      groupsByCategoryName.get(category.categoryName)?.add(category.groupName);
     });
     const duplicateCategoryNames = new Set(
       Array.from(groupsByCategoryName.entries())
@@ -104,28 +135,36 @@ export async function POST(request: NextRequest) {
     );
 
     const groupInputs = uniqueByName(
-      lines.map((line) => ({
-        name: line.groupName,
-        groupKey: line.groupKey,
-        color: line.categoryColor,
-        isIncome: line.groupKey === 'income',
+      importedCategories.map((category) => ({
+        name: category.groupName,
+        groupKey: category.groupKey,
+        color: category.categoryColor,
+        isIncome: category.groupKey === 'income',
       }))
     );
 
-    const { data: existingGroupRows, error: existingGroupFetchError } = await supabase
-      .from('categories')
-      .select('*')
-      .eq('household_id', household.id)
-      .in(
-        'name',
-        groupInputs.map((group) => group.name)
-      );
+    const [
+      { data: preImportCategoryRows, error: preImportCategoryError },
+      { data: preImportLayoutRows, error: preImportLayoutError },
+      { data: preImportBudgetRows, error: preImportBudgetError },
+    ] = await Promise.all([
+      supabase.from('categories').select('*').eq('household_id', household.id),
+      supabase.from('category_layout_periods').select('*').eq('household_id', household.id),
+      supabase.from('category_budget_periods').select('*').eq('household_id', household.id),
+    ]);
 
-    if (existingGroupFetchError) {
-      return NextResponse.json({ error: existingGroupFetchError.message }, { status: 500 });
+    const preImportError = preImportCategoryError ?? preImportLayoutError ?? preImportBudgetError;
+    if (preImportError) {
+      return NextResponse.json({ error: preImportError.message }, { status: 500 });
     }
 
-    const existingGroupNames = new Set(((existingGroupRows ?? []) as Category[]).map((group) => group.name));
+    const preImportCategories = (preImportCategoryRows ?? []) as Category[];
+    const preImportLayouts = (preImportLayoutRows ?? []) as CategoryLayoutPeriod[];
+    const preImportBudgets = (preImportBudgetRows ?? []) as CategoryBudgetPeriod[];
+    const preExistingCategoryIds = new Set(preImportCategories.map((category) => category.id));
+    const existingGroupNames = new Set(
+      preImportCategories.filter((category) => category.is_group).map((group) => group.name)
+    );
     const groupsToInsert = groupInputs.filter((group) => !existingGroupNames.has(group.name));
     if (groupsToInsert.length > 0) {
       const { error: groupInsertError } = await supabase.from('categories').insert(
@@ -146,46 +185,37 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    const { data: groupRows, error: groupFetchError } = await supabase
+    const { data: categoryRowsAfterGroups, error: groupFetchError } = await supabase
       .from('categories')
       .select('*')
-      .eq('household_id', household.id)
-      .in(
-        'name',
-        groupInputs.map((group) => group.name)
-      );
+      .eq('household_id', household.id);
 
     if (groupFetchError) {
       return NextResponse.json({ error: groupFetchError.message }, { status: 500 });
     }
 
-    const groupByName = new Map(((groupRows ?? []) as Category[]).map((group) => [group.name, group]));
+    const groupByName = new Map(
+      ((categoryRowsAfterGroups ?? []) as Category[])
+        .filter((category) => category.is_group)
+        .map((group) => [group.name, group])
+    );
     const categoryInputs = uniqueByName<CategoryInput>(
-      lines.map((line) => ({
-        name: getCategoryDbName(line, duplicateCategoryNames),
-        groupName: line.groupName,
-        groupKey: line.groupKey,
-        color: line.categoryColor,
-        isIncome: line.isIncome,
-        defaultMonthlyBudgetCents: line.defaultMonthlyBudgetCents,
-        sortOrder: line.sortOrder,
+      importedCategories.map((category) => ({
+        name: getCategoryDbName(category, duplicateCategoryNames),
+        groupName: category.groupName,
+        groupKey: category.groupKey,
+        color: category.categoryColor,
+        isIncome: category.isIncome,
+        defaultMonthlyBudgetCents: category.defaultMonthlyBudgetCents,
+        sortOrder: category.sortOrder,
       }))
     );
 
-    const { data: existingCategoryRows, error: existingCategoryFetchError } = await supabase
-      .from('categories')
-      .select('*')
-      .eq('household_id', household.id)
-      .in(
-        'name',
-        categoryInputs.map((category) => category.name)
-      );
-
-    if (existingCategoryFetchError) {
-      return NextResponse.json({ error: existingCategoryFetchError.message }, { status: 500 });
-    }
-
-    const existingCategoryNames = new Set(((existingCategoryRows ?? []) as Category[]).map((category) => category.name));
+    const existingCategoryNames = new Set(
+      ((categoryRowsAfterGroups ?? []) as Category[])
+        .filter((category) => !category.is_group)
+        .map((category) => category.name)
+    );
     const categoriesToInsert = categoryInputs.filter((category) => !existingCategoryNames.has(category.name));
     if (categoriesToInsert.length > 0) {
       const { error: categoryInsertError } = await supabase.from('categories').insert(
@@ -216,64 +246,121 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    const { data: categoryRows, error: categoryFetchError } = await supabase
+    const { data: allCategoryRows, error: categoryFetchError } = await supabase
       .from('categories')
       .select('*')
-      .eq('household_id', household.id)
-      .in(
-        'name',
-        categoryInputs.map((category) => category.name)
-      );
+      .eq('household_id', household.id);
 
     if (categoryFetchError) {
       return NextResponse.json({ error: categoryFetchError.message }, { status: 500 });
     }
 
-    const categoryByName = new Map(((categoryRows ?? []) as Category[]).map((category) => [category.name, category]));
-    const importedMonths = Array.from(new Set(lines.map((line) => line.month))).sort((first, second) => first - second);
-    const groupLayoutRows = groupInputs.flatMap((group, index) => {
-      const category = groupByName.get(group.name);
-      if (!category) {
-        return [];
-      }
+    const allCategories = (allCategoryRows ?? []) as Category[];
+    const categoryByName = new Map(
+      allCategories
+        .filter((category) => !category.is_group)
+        .map((category) => [category.name, category])
+    );
+    const selectedSnapshots = uniqueByKey(
+      importedCategories.map((category) => ({
+        ...category,
+        databaseName: getCategoryDbName(category, duplicateCategoryNames),
+      })),
+      (category) => `${category.year}:${category.month}:${category.databaseName}`
+    );
+    const importedMonths = Array.from(new Set(selectedSnapshots.map((category) => category.month))).sort(
+      (first, second) => first - second
+    );
+    const restorationMonths = getImportRestorationMonths(
+      importedMonths.map((month) => ({ year: yearValue, month }))
+    );
+    const snapshotsByMonth = new Map(
+      importedMonths.map((month) => [
+        month,
+        selectedSnapshots.filter((category) => category.month === month),
+      ])
+    );
+    const selectedLayoutRows = importedMonths.flatMap((month) => {
+      const monthSnapshots = snapshotsByMonth.get(month) ?? [];
+      const snapshotByCategoryName = new Map(
+        monthSnapshots.map((snapshot) => [snapshot.databaseName, snapshot])
+      );
+      const importedGroupNames = Array.from(
+        new Set(monthSnapshots.map((snapshot) => snapshot.groupName))
+      );
+      const groupOrderByName = new Map(
+        importedGroupNames.map((groupName, index) => [groupName, (index + 1) * 100])
+      );
+      const preImportLayoutByCategoryId = new Map(
+        resolveCategoryLayout(preImportCategories, preImportLayouts, yearValue, month).map((layout) => [
+          layout.category.id,
+          layout,
+        ])
+      );
 
-      return importedMonths.map((month) => ({
-        household_id: household.id,
-        category_id: category.id,
-        parent_category_id: null,
-        start_year: yearValue,
-        start_month: month,
-        end_year: yearValue,
-        end_month: month,
-        sort_order: (index + 1) * 100,
-        is_visible: true,
-        notes: `Imported layout from ${source}`,
-      }));
+      return allCategories.map((category) => {
+        const fallback = preImportLayoutByCategoryId.get(category.id);
+        const snapshot = category.is_group ? null : snapshotByCategoryName.get(category.name);
+        const isImportedGroup = category.is_group && importedGroupNames.includes(category.name);
+        const importedParent = snapshot ? groupByName.get(snapshot.groupName) : null;
+
+        return {
+          household_id: household.id,
+          category_id: category.id,
+          parent_category_id: snapshot
+            ? importedParent?.id ?? fallback?.parentCategoryId ?? category.parent_category_id
+            : fallback?.parentCategoryId ?? category.parent_category_id,
+          start_year: yearValue,
+          start_month: month,
+          end_year: yearValue,
+          end_month: month,
+          sort_order: snapshot
+            ? snapshot.sortOrder
+            : isImportedGroup
+              ? groupOrderByName.get(category.name) ?? fallback?.sortOrder ?? category.sort_order ?? 0
+              : fallback?.sortOrder ?? category.sort_order ?? 0,
+          is_visible: Boolean(snapshot || isImportedGroup),
+          notes: `Imported layout from ${source}`,
+        };
+      });
     });
-    const categoryLayoutRows = categoryInputs.flatMap((categoryInput) => {
-      const category = categoryByName.get(categoryInput.name);
-      const group = groupByName.get(categoryInput.groupName);
-      if (!category || !group) {
-        return [];
-      }
+    const restorationLayoutRows = restorationMonths.flatMap((restorationMonth) => {
+      const preImportLayoutByCategoryId = new Map(
+        resolveCategoryLayout(
+          preImportCategories,
+          preImportLayouts,
+          restorationMonth.year,
+          restorationMonth.month
+        ).map((layout) => [layout.category.id, layout])
+      );
 
-      return importedMonths.map((month) => ({
-        household_id: household.id,
-        category_id: category.id,
-        parent_category_id: group.id,
-        start_year: yearValue,
-        start_month: month,
-        end_year: yearValue,
-        end_month: month,
-        sort_order: categoryInput.sortOrder,
-        is_visible: true,
-        notes: `Imported layout from ${source}`,
-      }));
+      return allCategories.map((category) => {
+        const fallback = preImportLayoutByCategoryId.get(category.id);
+        const exactPeriod =
+          fallback?.period?.start_year === restorationMonth.year &&
+          fallback.period.start_month === restorationMonth.month
+            ? fallback.period
+            : null;
+
+        return {
+          household_id: household.id,
+          category_id: category.id,
+          parent_category_id: fallback?.parentCategoryId ?? category.parent_category_id,
+          start_year: restorationMonth.year,
+          start_month: restorationMonth.month,
+          end_year: exactPeriod?.end_year ?? null,
+          end_month: exactPeriod?.end_month ?? null,
+          sort_order: fallback?.sortOrder ?? category.sort_order ?? 0,
+          is_visible: preExistingCategoryIds.has(category.id) ? fallback?.isVisible ?? true : false,
+          notes: exactPeriod?.notes ?? `Restored layout after ${source} import`,
+        };
+      });
     });
+    const layoutRows = [...selectedLayoutRows, ...restorationLayoutRows];
 
-    if (groupLayoutRows.length > 0 || categoryLayoutRows.length > 0) {
+    if (layoutRows.length > 0) {
       const { error: layoutUpsertError } = await supabase.from('category_layout_periods').upsert(
-        [...groupLayoutRows, ...categoryLayoutRows],
+        layoutRows,
         { onConflict: 'household_id,category_id,start_year,start_month' }
       );
 
@@ -282,22 +369,48 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    const budgetPeriodRows = categoryInputs.flatMap((categoryInput) => {
-      const category = categoryByName.get(categoryInput.name);
-      if (!category || category.is_group) {
+    const selectedBudgetRows = selectedSnapshots.flatMap((snapshot) => {
+      const category = categoryByName.get(snapshot.databaseName);
+      if (!category) {
         return [];
       }
 
-      return importedMonths.map((month) => ({
+      return [{
         household_id: household.id,
         category_id: category.id,
         year: yearValue,
-        start_month: month,
-        amount_cents: categoryInput.defaultMonthlyBudgetCents,
+        start_month: snapshot.month,
+        amount_cents: snapshot.defaultMonthlyBudgetCents,
         notes: `Imported budget from ${source}`,
-      }));
+      }];
     });
+    const preImportCategoryById = new Map(preImportCategories.map((category) => [category.id, category]));
+    const restorationBudgetRows = restorationMonths.flatMap((restorationMonth) =>
+      allCategories
+        .filter((category) => !category.is_group)
+        .map((category) => {
+          const preImportCategory = preImportCategoryById.get(category.id);
+          const amountCents = preImportCategory
+            ? resolveCategoryBudgetAmount(
+                category.id,
+                preImportCategory.default_monthly_budget_cents,
+                preImportBudgets,
+                restorationMonth.year,
+                restorationMonth.month
+              ).amount_cents
+            : 0;
 
+          return {
+            household_id: household.id,
+            category_id: category.id,
+            year: restorationMonth.year,
+            start_month: restorationMonth.month,
+            amount_cents: amountCents,
+            notes: `Restored budget after ${source} import`,
+          };
+        })
+    );
+    const budgetPeriodRows = [...selectedBudgetRows, ...restorationBudgetRows];
     if (budgetPeriodRows.length > 0) {
       const { error: budgetPeriodUpsertError } = await supabase.from('category_budget_periods').upsert(budgetPeriodRows, {
         onConflict: 'household_id,category_id,year,start_month',
@@ -333,12 +446,14 @@ export async function POST(request: NextRequest) {
       })
       .filter((row): row is NonNullable<typeof row> => row !== null);
 
-    const { error: lineUpsertError } = await supabase.from('imported_budget_lines').upsert(rows, {
-      onConflict: 'household_id,source,source_sheet,source_cell',
-    });
+    if (rows.length > 0) {
+      const { error: lineUpsertError } = await supabase.from('imported_budget_lines').upsert(rows, {
+        onConflict: 'household_id,source,source_sheet,source_cell',
+      });
 
-    if (lineUpsertError) {
-      return NextResponse.json({ error: lineUpsertError.message }, { status: 500 });
+      if (lineUpsertError) {
+        return NextResponse.json({ error: lineUpsertError.message }, { status: 500 });
+      }
     }
 
     return NextResponse.json({
