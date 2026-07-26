@@ -4,6 +4,8 @@ import { createServiceSupabaseClient } from '@/lib/supabaseService';
 import { getCurrentHousehold } from '@/lib/households';
 
 interface UpdateTransactionPayload {
+  budget_group_id?: string | null;
+  budget_group_name?: string | null;
   category_id?: string | null;
   notes?: string | null;
   tag_ids?: string[];
@@ -51,6 +53,16 @@ interface TransactionRecord {
   id: string;
   household_id: string | null;
   amount_cents: number;
+}
+
+interface ResolvedBudgetGroup {
+  id: string;
+  name: string;
+}
+
+function normalizeBudgetGroupName(name: string | null | undefined): string | null {
+  const normalizedName = name?.trim().replace(/\s+/g, ' ') ?? '';
+  return normalizedName.length > 0 ? normalizedName : null;
 }
 
 export async function PATCH(request: NextRequest, { params }: RouteParams) {
@@ -249,6 +261,123 @@ export async function PATCH(request: NextRequest, { params }: RouteParams) {
     }
   }
 
+  let resolvedBudgetGroup: ResolvedBudgetGroup | null | undefined;
+  const updatesBudgetGroup = 'budget_group_id' in payload || 'budget_group_name' in payload;
+
+  if (updatesBudgetGroup) {
+    const requestedGroupId = payload.budget_group_id || null;
+    const requestedGroupName = normalizeBudgetGroupName(payload.budget_group_name);
+
+    if (requestedGroupId && requestedGroupName) {
+      return NextResponse.json({ error: 'Choose an existing budget group or create a new one, not both.' }, { status: 400 });
+    }
+
+    if (requestedGroupName && requestedGroupName.length > 80) {
+      return NextResponse.json({ error: 'Budget group names must be 80 characters or fewer.' }, { status: 400 });
+    }
+
+    if (requestedGroupId) {
+      const { data: budgetGroup, error: budgetGroupError } = await serviceSupabase
+        .from('budget_transaction_groups')
+        .select('id, name')
+        .eq('id', requestedGroupId)
+        .eq('household_id', household.id)
+        .maybeSingle();
+
+      if (budgetGroupError) {
+        return NextResponse.json({ error: budgetGroupError.message }, { status: 500 });
+      }
+
+      if (!budgetGroup) {
+        return NextResponse.json({ error: 'Budget group not found.' }, { status: 400 });
+      }
+
+      resolvedBudgetGroup = budgetGroup as ResolvedBudgetGroup;
+    } else if (requestedGroupName) {
+      const { data: existingBudgetGroups, error: existingBudgetGroupsError } = await serviceSupabase
+        .from('budget_transaction_groups')
+        .select('id, name')
+        .eq('household_id', household.id);
+
+      if (existingBudgetGroupsError) {
+        return NextResponse.json({ error: existingBudgetGroupsError.message }, { status: 500 });
+      }
+
+      resolvedBudgetGroup =
+        ((existingBudgetGroups ?? []) as ResolvedBudgetGroup[]).find(
+          (group) => group.name.trim().toLowerCase() === requestedGroupName.toLowerCase()
+        ) ?? null;
+
+      if (!resolvedBudgetGroup) {
+        const { data: createdBudgetGroup, error: createBudgetGroupError } = await serviceSupabase
+          .from('budget_transaction_groups')
+          .insert({
+            household_id: household.id,
+            name: requestedGroupName,
+            created_by: user.id,
+          })
+          .select('id, name')
+          .single();
+
+        if (createBudgetGroupError) {
+          if (createBudgetGroupError.code !== '23505') {
+            return NextResponse.json({ error: createBudgetGroupError.message }, { status: 500 });
+          }
+
+          const { data: concurrentBudgetGroups, error: concurrentBudgetGroupsError } = await serviceSupabase
+            .from('budget_transaction_groups')
+            .select('id, name')
+            .eq('household_id', household.id);
+
+          if (concurrentBudgetGroupsError) {
+            return NextResponse.json({ error: concurrentBudgetGroupsError.message }, { status: 500 });
+          }
+
+          resolvedBudgetGroup =
+            ((concurrentBudgetGroups ?? []) as ResolvedBudgetGroup[]).find(
+              (group) => group.name.trim().toLowerCase() === requestedGroupName.toLowerCase()
+            ) ?? null;
+
+          if (!resolvedBudgetGroup) {
+            return NextResponse.json({ error: 'Unable to resolve the new budget group.' }, { status: 500 });
+          }
+        } else {
+          resolvedBudgetGroup = createdBudgetGroup as ResolvedBudgetGroup;
+        }
+      }
+    } else {
+      resolvedBudgetGroup = null;
+    }
+
+    if (resolvedBudgetGroup) {
+      const { error: assignBudgetGroupError } = await serviceSupabase
+        .from('budget_transaction_group_members')
+        .upsert(
+          {
+            transaction_id: params.transactionId,
+            group_id: resolvedBudgetGroup.id,
+            household_id: household.id,
+            created_by: user.id,
+          },
+          { onConflict: 'transaction_id' }
+        );
+
+      if (assignBudgetGroupError) {
+        return NextResponse.json({ error: assignBudgetGroupError.message }, { status: 500 });
+      }
+    } else {
+      const { error: removeBudgetGroupError } = await serviceSupabase
+        .from('budget_transaction_group_members')
+        .delete()
+        .eq('transaction_id', params.transactionId)
+        .eq('household_id', household.id);
+
+      if (removeBudgetGroupError) {
+        return NextResponse.json({ error: removeBudgetGroupError.message }, { status: 500 });
+      }
+    }
+  }
+
   if (payload.tag_ids || payload.tag_names) {
     const { error: deleteTagsError } = await serviceSupabase
       .from('transaction_tags')
@@ -369,6 +498,7 @@ export async function PATCH(request: NextRequest, { params }: RouteParams) {
   }
 
   return NextResponse.json({
+    budget_group: resolvedBudgetGroup,
     ok: true,
     tags: resolvedTags?.length ? resolvedTags : resolvedCreatedTags,
   });

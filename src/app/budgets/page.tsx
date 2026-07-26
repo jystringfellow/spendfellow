@@ -24,6 +24,7 @@ import {
 } from '@/lib/categoryBalances';
 import { resolveCategoryLayout } from '@/lib/categoryLayouts';
 import { resolveCategoryBudgetAmount } from '@/lib/constantPeriods';
+import { groupBudgetLines, type BudgetLineGroup } from '@/lib/budgetLineGrouping';
 import { getCurrentHousehold } from '@/lib/households';
 import { formatCurrency } from '@/lib/money';
 import { createServerSupabaseClient } from '@/lib/supabaseServer';
@@ -32,6 +33,8 @@ import type {
   Account,
   AccountBalanceSnapshot,
   BudgetActualLine,
+  BudgetTransactionGroup,
+  BudgetTransactionGroupMember,
   Category,
   CategoryBalanceAdjustment,
   CategoryBudgetPeriod,
@@ -45,6 +48,8 @@ import type {
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'June', 'July', 'Aug', 'Sept', 'Oct', 'Nov', 'Dec'] as const;
 const MONTH_SLUGS = ['jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec'] as const;
 const MONTHLY_MIN_ROWS = 18;
+const MONTHLY_TRAILING_ROWS = 3;
+const MONTHLY_STICKY_ROW_HEIGHT = 22;
 
 interface BudgetsPageProps {
   searchParams?: {
@@ -54,10 +59,14 @@ interface BudgetsPageProps {
 }
 
 interface MonthlyDetailLine extends BudgetActualLine {
+  budget_group_id: string | null;
+  budget_group_name: string | null;
   description: string;
   merchant_name: string | null;
   tags: Pick<Tag, 'id' | 'name' | 'color'>[];
 }
+
+type MonthlyDisplayLine = BudgetLineGroup<MonthlyDetailLine>;
 
 interface CategorySection {
   id: string;
@@ -265,7 +274,7 @@ function getSectionRole(sectionOrCategory: Pick<Category, 'name' | 'group_key' |
 }
 
 function getMonthlyLineTitle(line: MonthlyDetailLine): string {
-  return line.merchant_name ?? line.description;
+  return line.merchant_name?.trim() || line.description;
 }
 
 function getMonthlyLineTooltip(line: MonthlyDetailLine): string {
@@ -275,6 +284,31 @@ function getMonthlyLineTooltip(line: MonthlyDetailLine): string {
   const base = [title, line.date, tags].filter(Boolean).join('\n');
 
   return note && note !== title ? `${base}\n${note}` : base;
+}
+
+function getMonthlyDisplayLineTooltip(displayLine: MonthlyDisplayLine): string {
+  if (displayLine.lines.length === 1) {
+    return getMonthlyLineTooltip(displayLine.lines[0]);
+  }
+
+  const firstDate = displayLine.lines[0]?.date;
+  const lastDate = displayLine.lines[displayLine.lines.length - 1]?.date;
+  const dateRange = firstDate === lastDate ? firstDate : `${firstDate} – ${lastDate}`;
+  const previewLines = displayLine.lines.slice(0, 5).map((line) => `${line.date}: ${formatCurrency(Math.abs(line.amount_cents))}`);
+  const remainingCount = displayLine.lines.length - previewLines.length;
+
+  return [
+    displayLine.label,
+    `${displayLine.lines.length} transactions`,
+    dateRange,
+    '',
+    ...previewLines,
+    remainingCount > 0 ? `…and ${remainingCount} more` : null,
+    '',
+    'Manage this group from Transactions.',
+  ]
+    .filter((value): value is string => Boolean(value))
+    .join('\n');
 }
 
 function getLineFontColor(line: MonthlyDetailLine): string {
@@ -291,6 +325,11 @@ function getLineFontColor(line: MonthlyDetailLine): string {
   }
 
   return '#000';
+}
+
+function getDisplayLineFontColor(displayLine: MonthlyDisplayLine): string {
+  const colors = new Set(displayLine.lines.map(getLineFontColor));
+  return colors.size === 1 ? Array.from(colors)[0] : '#000';
 }
 
 function formatSheetExpense(cents: number): string {
@@ -433,6 +472,15 @@ function getCellBorderSx() {
     fontSize: 12,
     lineHeight: 1.15,
     color: '#000',
+  };
+}
+
+function getStickyCellSx(position: 'top' | 'bottom', offset: number, zIndex = 2) {
+  return {
+    position: 'sticky',
+    [position]: offset,
+    zIndex,
+    backgroundClip: 'padding-box',
   };
 }
 
@@ -700,14 +748,43 @@ export default async function BudgetsPage({ searchParams }: BudgetsPageProps) {
   const monthlySplitIds = actualLines
     .map((line) => line.transaction_split_id)
     .filter((splitId): splitId is string => Boolean(splitId));
-  const [{ data: transactionTagRows }, { data: splitTagRows }] = await Promise.all([
+  const [{ data: transactionTagRows }, { data: splitTagRows }, { data: budgetGroupMemberRows }] = await Promise.all([
     transactionIds.length > 0
       ? supabase.from('transaction_tags').select('transaction_id, tag_id').in('transaction_id', transactionIds)
       : Promise.resolve({ data: [] }),
     monthlySplitIds.length > 0
       ? supabase.from('transaction_split_tags').select('transaction_split_id, tag_id').in('transaction_split_id', monthlySplitIds)
       : Promise.resolve({ data: [] }),
+    household && transactionIds.length > 0
+      ? supabase
+          .from('budget_transaction_group_members')
+          .select('transaction_id, group_id, household_id, created_by, created_at')
+          .eq('household_id', household.id)
+          .in('transaction_id', transactionIds)
+      : Promise.resolve({ data: [] }),
   ]);
+  const budgetGroupIds = Array.from(
+    new Set(
+      ((budgetGroupMemberRows ?? []) as BudgetTransactionGroupMember[]).map((member) => member.group_id)
+    )
+  );
+  const { data: budgetGroupRows } =
+    household && budgetGroupIds.length > 0
+      ? await supabase
+          .from('budget_transaction_groups')
+          .select('*')
+          .eq('household_id', household.id)
+          .in('id', budgetGroupIds)
+      : { data: [] };
+  const budgetGroupById = new Map(
+    ((budgetGroupRows ?? []) as BudgetTransactionGroup[]).map((group) => [group.id, group])
+  );
+  const budgetGroupIdByTransactionId = new Map(
+    ((budgetGroupMemberRows ?? []) as BudgetTransactionGroupMember[]).map((member) => [
+      member.transaction_id,
+      member.group_id,
+    ])
+  );
   const tagIds = Array.from(
     new Set([
       ...((transactionTagRows ?? []) as TransactionTag[]).map((row) => row.tag_id),
@@ -749,6 +826,12 @@ export default async function BudgetsPage({ searchParams }: BudgetsPageProps) {
         : [];
     const detailLine: MonthlyDetailLine = {
       ...line,
+      budget_group_id: line.transaction_id
+        ? budgetGroupIdByTransactionId.get(line.transaction_id) ?? null
+        : null,
+      budget_group_name: line.transaction_id
+        ? budgetGroupById.get(budgetGroupIdByTransactionId.get(line.transaction_id) ?? '')?.name ?? null
+        : null,
       description: line.description,
       merchant_name: line.merchant_name,
       tags,
@@ -756,10 +839,17 @@ export default async function BudgetsPage({ searchParams }: BudgetsPageProps) {
     monthlyLinesByCategoryId.set(line.category_id, [...(monthlyLinesByCategoryId.get(line.category_id) ?? []), detailLine]);
   });
 
-  const monthlyRows = Math.max(
-    MONTHLY_MIN_ROWS,
-    ...visibleCategories.map((category) => monthlyLinesByCategoryId.get(category.id)?.length ?? 0)
+  const monthlyDisplayLinesByCategoryId = new Map<string, MonthlyDisplayLine[]>(
+    visibleCategories.map((category) => {
+      const lines = monthlyLinesByCategoryId.get(category.id) ?? [];
+      return [category.id, groupBudgetLines(lines)];
+    })
   );
+  const longestMonthlyCategory = Math.max(
+    0,
+    ...visibleCategories.map((category) => monthlyDisplayLinesByCategoryId.get(category.id)?.length ?? 0)
+  );
+  const monthlyRows = Math.max(MONTHLY_MIN_ROWS, longestMonthlyCategory + MONTHLY_TRAILING_ROWS);
   const incomeMonthTotals = MONTHS.map((_monthName, monthIndex) =>
     incomeSections.reduce(
       (total, section) => total + getSectionMonthTotal(section, spendingByCategoryMonth, monthIndex + 1),
@@ -1205,7 +1295,17 @@ export default async function BudgetsPage({ searchParams }: BudgetsPageProps) {
             </Table>
           </TableContainer>
         ) : (
-          <TableContainer sx={{ overflowX: 'auto', bgcolor: '#fff' }}>
+          <TableContainer
+            sx={{
+              overflowX: 'auto',
+              overflowY: 'auto',
+              bgcolor: '#fff',
+              height: { xs: 'calc(100vh - 190px)', sm: 'calc(100vh - 140px)' },
+              minHeight: 520,
+              overscrollBehavior: 'contain',
+              scrollbarGutter: 'stable',
+            }}
+          >
             <Table size="small" sx={{ minWidth: 1420, tableLayout: 'fixed', borderCollapse: 'collapse' }}>
               <TableBody>
                 <TableRow>
@@ -1252,7 +1352,13 @@ export default async function BudgetsPage({ searchParams }: BudgetsPageProps) {
                       <TableCell
                         colSpan={section.categories.length}
                         align="center"
-                        sx={{ ...getCellBorderSx(), bgcolor: section.headerColor, fontWeight: 700 }}
+                        sx={{
+                          ...getCellBorderSx(),
+                          ...getStickyCellSx('top', 0, 4),
+                          bgcolor: section.headerColor,
+                          fontWeight: 700,
+                          whiteSpace: 'nowrap',
+                        }}
                       >
                         {section.name}
                       </TableCell>
@@ -1260,7 +1366,12 @@ export default async function BudgetsPage({ searchParams }: BudgetsPageProps) {
                         <TableCell
                           align="center"
                           rowSpan={2}
-                          sx={{ ...getCellBorderSx(), bgcolor: '#a9c7c9', fontWeight: 700 }}
+                          sx={{
+                            ...getCellBorderSx(),
+                            ...getStickyCellSx('top', 0, 4),
+                            bgcolor: '#a9c7c9',
+                            fontWeight: 700,
+                          }}
                         >
                           Budget
                         </TableCell>
@@ -1272,7 +1383,17 @@ export default async function BudgetsPage({ searchParams }: BudgetsPageProps) {
                   {sections.map((section) => (
                     <Fragment key={`${section.id}:categories`}>
                       {section.categories.map((category) => (
-                        <TableCell key={category.id} sx={{ ...getCellBorderSx(), bgcolor: section.color }}>
+                        <TableCell
+                          key={category.id}
+                          sx={{
+                            ...getCellBorderSx(),
+                            ...getStickyCellSx('top', MONTHLY_STICKY_ROW_HEIGHT, 4),
+                            bgcolor: section.color,
+                            whiteSpace: 'nowrap',
+                            overflow: 'hidden',
+                            textOverflow: 'ellipsis',
+                          }}
+                        >
                           {getSheetCategoryName(category, section)}
                           {rolloverBalanceByCategoryId.get(category.id)?.active ? ' ↻' : ''}
                         </TableCell>
@@ -1287,7 +1408,12 @@ export default async function BudgetsPage({ searchParams }: BudgetsPageProps) {
                         <TableCell
                           align="center"
                           colSpan={section.categories.length}
-                          sx={{ ...getCellBorderSx(), bgcolor: '#d9d9d9', fontWeight: 700 }}
+                          sx={{
+                            ...getCellBorderSx(),
+                            ...getStickyCellSx('top', MONTHLY_STICKY_ROW_HEIGHT * 2, 4),
+                            bgcolor: '#d9d9d9',
+                            fontWeight: 700,
+                          }}
                         >
                           {formatCurrency(bigWantsCapacityCents)}
                         </TableCell>
@@ -1305,7 +1431,15 @@ export default async function BudgetsPage({ searchParams }: BudgetsPageProps) {
                                 );
 
                           return (
-                            <TableCell key={category.id} align="right" sx={{ ...getCellBorderSx(), bgcolor: '#d9d9d9' }}>
+                            <TableCell
+                              key={category.id}
+                              align="right"
+                              sx={{
+                                ...getCellBorderSx(),
+                                ...getStickyCellSx('top', MONTHLY_STICKY_ROW_HEIGHT * 2, 4),
+                                bgcolor: '#d9d9d9',
+                              }}
+                            >
                               {section.role === 'expense' ? (
                                 rolloverBalance?.active ? (
                                   <Tooltip
@@ -1327,7 +1461,15 @@ export default async function BudgetsPage({ searchParams }: BudgetsPageProps) {
                         })
                       )}
                       {section.id === needsSection?.id ? (
-                        <TableCell align="right" sx={{ ...getCellBorderSx(), bgcolor: '#d9d9d9', fontWeight: 700 }}>
+                        <TableCell
+                          align="right"
+                          sx={{
+                            ...getCellBorderSx(),
+                            ...getStickyCellSx('top', MONTHLY_STICKY_ROW_HEIGHT * 2, 4),
+                            bgcolor: '#d9d9d9',
+                            fontWeight: 700,
+                          }}
+                        >
                           {formatCurrency(needsBudgetCents)}
                         </TableCell>
                       ) : null}
@@ -1339,7 +1481,7 @@ export default async function BudgetsPage({ searchParams }: BudgetsPageProps) {
                     {sections.map((section) => (
                       <Fragment key={`${section.id}:row:${rowIndex}`}>
                         {section.categories.map((category) => {
-                          const lines = monthlyLinesByCategoryId.get(category.id) ?? [];
+                          const lines = monthlyDisplayLinesByCategoryId.get(category.id) ?? [];
                           const line = lines[rowIndex];
                           return (
                             <TableCell
@@ -1348,16 +1490,23 @@ export default async function BudgetsPage({ searchParams }: BudgetsPageProps) {
                               sx={{
                                 ...getCellBorderSx(),
                                 bgcolor: line ? (section.role === 'expense' ? '#f4cccc' : '#d9ead3') : '#fff',
-                                color: line ? getLineFontColor(line) : '#000',
+                                color: line ? getDisplayLineFontColor(line) : '#000',
                               }}
                             >
                               {line ? (
                                 <Tooltip
-                                  title={<Box sx={{ whiteSpace: 'pre-line' }}>{getMonthlyLineTooltip(line)}</Box>}
+                                  title={<Box sx={{ whiteSpace: 'pre-line' }}>{getMonthlyDisplayLineTooltip(line)}</Box>}
                                   arrow
                                   placement="right"
                                 >
-                                  <Box sx={{ cursor: 'default' }}>{formatSheetAmount(line.amount_cents, section.role)}</Box>
+                                  <Box sx={{ cursor: 'default', whiteSpace: 'nowrap' }}>
+                                    {formatSheetAmount(line.amountCents, section.role)}
+                                    {line.lines.length > 1 ? (
+                                      <Box component="span" sx={{ ml: 0.5, fontSize: 10, fontWeight: 700 }}>
+                                        ×{line.lines.length}
+                                      </Box>
+                                    ) : null}
+                                  </Box>
                                 </Tooltip>
                               ) : null}
                             </TableCell>
@@ -1382,14 +1531,31 @@ export default async function BudgetsPage({ searchParams }: BudgetsPageProps) {
                           <TableCell
                             key={category.id}
                             align="right"
-                            sx={{ ...getCellBorderSx(), bgcolor: section.role === 'expense' ? '#f4cccc' : '#d9ead3' }}
+                            sx={{
+                              ...getCellBorderSx(),
+                              ...getStickyCellSx('bottom', MONTHLY_STICKY_ROW_HEIGHT, 3),
+                              bgcolor: section.role === 'expense' ? '#f4cccc' : '#d9ead3',
+                              borderTop: '3px solid #000',
+                              boxShadow: '0 -3px 5px rgba(0, 0, 0, 0.18)',
+                              fontWeight: 700,
+                            }}
                           >
                             {formatSheetAmount(total, section.role)}
                           </TableCell>
                         );
                       })}
                       {section.id === needsSection?.id ? (
-                        <TableCell align="right" sx={{ ...getCellBorderSx(), bgcolor: '#f4cccc', fontWeight: 700 }}>
+                        <TableCell
+                          align="right"
+                          sx={{
+                            ...getCellBorderSx(),
+                            ...getStickyCellSx('bottom', MONTHLY_STICKY_ROW_HEIGHT, 3),
+                            bgcolor: '#f4cccc',
+                            borderTop: '3px solid #000',
+                            boxShadow: '0 -3px 5px rgba(0, 0, 0, 0.18)',
+                            fontWeight: 700,
+                          }}
+                        >
                           {formatSheetExpense(needsSpentCents)}
                         </TableCell>
                       ) : null}
@@ -1428,6 +1594,7 @@ export default async function BudgetsPage({ searchParams }: BudgetsPageProps) {
                             align="right"
                             sx={{
                               ...getCellBorderSx(),
+                              ...getStickyCellSx('bottom', 0, 3),
                               bgcolor:
                                 section.role === 'expense'
                                   ? remaining < 0
@@ -1446,7 +1613,12 @@ export default async function BudgetsPage({ searchParams }: BudgetsPageProps) {
                       {section.id === needsSection?.id ? (
                         <TableCell
                           align="right"
-                          sx={{ ...getCellBorderSx(), bgcolor: needsRemainingCents >= 0 ? '#d9ead3' : '#f4cccc', fontWeight: 700 }}
+                          sx={{
+                            ...getCellBorderSx(),
+                            ...getStickyCellSx('bottom', 0, 3),
+                            bgcolor: needsRemainingCents >= 0 ? '#d9ead3' : '#f4cccc',
+                            fontWeight: 700,
+                          }}
                         >
                           {formatCurrency(needsRemainingCents)}
                         </TableCell>
