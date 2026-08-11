@@ -1,3 +1,6 @@
+-- One-off repair for deployments affected by the 2026 partial budget import bug.
+-- Do not run this script on a fresh installation.
+
 -- Partial historical imports previously replaced an existing January baseline
 -- with a January-only imported layout. Reopen only rows that were updated in
 -- place; newly created import-only categories keep their original month scope.

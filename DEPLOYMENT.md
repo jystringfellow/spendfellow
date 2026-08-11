@@ -24,6 +24,19 @@ your private deployment repo
 
 This keeps credentials out of Git while still letting you pull reusable app updates into your private deployment. The private repository can stay nearly identical to the public one; put deployment-specific values in Supabase, Plaid, Vercel, and local environment variables instead of hard-coding them.
 
+### Which repository owns what?
+
+| Concern | Public `spendfellow` | Private `spendfellow-private` |
+| --- | --- | --- |
+| Reusable application code and documentation | Source of truth | Receives updates from `upstream` |
+| `supabase/config.toml` and active migrations | Source of truth | Receives the same tracked files from `upstream` |
+| Local Supabase development and migration validation | Recommended checkout | Optional |
+| Production Supabase project link | Do not link | Link here; metadata stays in ignored `supabase/.temp/` |
+| Plaid, Supabase, and deployment secrets | Never commit | Keep in `.env.local` or provider settings; never commit |
+| Vercel production branch | Not connected | Connect private `main` |
+
+The `project_id` in `supabase/config.toml` names the local Docker stack; it is not the hosted Supabase project reference. `pnpm supabase link` stores the hosted project reference separately under `supabase/.temp/`, which remains local and ignored.
+
 ## Why Not a Private Fork?
 
 GitHub forks usually inherit the visibility of the source repository. A fork of a public repository is public. If you want a private deployment repository, create a separate private repository instead of using GitHub's fork button.
@@ -69,45 +82,74 @@ From then on, `origin` is your private deployment repo and `upstream` is this pu
 
 If you already cloned the public repository and want to reuse that local checkout for your private deployment, run the same remote rename/add commands from the existing checkout after creating the empty private repository.
 
-## Pulling Public Updates Into Your Private Deployment Repo
+## Publishing Public Updates To Your Private Deployment
 
-When this public repository changes, pull those updates into your private deployment repo:
+Finish and merge reusable work in the public repository first. Validate database migrations against the disposable local database before opening or merging the public pull request:
 
 ```bash
+cd ~/Code/spendfellow
+pnpm db:start
+pnpm db:reset
+pnpm db:lint
+pnpm test
+pnpm type-check
+pnpm build
+pnpm db:stop
+```
+
+After the public pull request is merged, update the private deployment checkout:
+
+```bash
+cd ~/Code/spendfellow-private
+git status --short
 git fetch upstream
 git merge --ff-only upstream/main
+pnpm install --frozen-lockfile
+pnpm test
+pnpm type-check
+pnpm build
+pnpm db:push:dry-run
+pnpm db:push
 git push origin main
 ```
 
 Use `git merge upstream/main` instead of `--ff-only` only if your private repository intentionally has private commits that are not in the public repository. Prefer keeping private changes small so updates stay easy.
 
-If Vercel is connected to the private repository, pushing to the configured production branch can trigger a deployment.
+The private checkout must be linked to its production Supabase project before running `db:push`. Apply the database migrations only after the application checks pass, but before pushing private `main`; this keeps schema changes ahead of application code that may depend on them. If Vercel is connected to private `main`, the final Git push triggers the application deployment. Vercel does not run `pnpm db:push` automatically.
 
-## Maintainer Workflow For This Public Repo
+When converting an existing manually managed database to the baseline for the first time, follow [Adopting the baseline on a manually managed database](#adopting-the-baseline-on-a-manually-managed-database) before the `db:push` step.
 
-If you maintain the public template repository and also deploy your own private copy, your local remotes might look like this:
+### First sync after adopting the tracked CLI configuration
 
-```bash
-upstream -> public Spendfellow repository
-origin   -> private deployment repository
-```
+If `supabase init` was previously run in the private checkout, `git status --short` may show untracked `supabase/config.toml` and `supabase/.gitignore` files. Once the public repository tracks those same paths, they must be moved aside or removed before the first upstream merge can write the tracked versions. Preserve `supabase/.temp/`; that ignored directory contains the private checkout's hosted-project link.
 
-To convert this local checkout into that maintainer layout after creating an empty private GitHub repository:
+For the first sync only, move the generated copies to a temporary backup before merging:
 
 ```bash
-git remote rename origin upstream
-git remote add origin git@github.com:you/spendfellow-private.git
-git push -u origin main
+cd ~/Code/spendfellow-private
+mkdir -p /tmp/spendfellow-private-supabase-init
+mv supabase/config.toml /tmp/spendfellow-private-supabase-init/config.toml
+mv supabase/.gitignore /tmp/spendfellow-private-supabase-init/supabase.gitignore
+git fetch upstream
+git merge --ff-only upstream/main
 ```
 
-Push reusable changes to `upstream`, then push the deployable branch to `origin`:
+After the merge, the public tracked versions replace them and the ignored `supabase/.temp/` link continues to identify the production project. The temporary copies can be deleted after confirming `pnpm supabase migration list --linked` reaches the intended project.
+
+Confirm the private checkout uses this remote layout:
 
 ```bash
-git push upstream main
-git push origin main
+origin   https://github.com/you/spendfellow-private.git
+upstream https://github.com/<source-owner>/spendfellow.git
 ```
 
-Before pushing to the public `upstream`, run the safety checklist above and confirm private artifacts remain ignored.
+The public checkout can keep the ordinary layout:
+
+```bash
+origin https://github.com/<source-owner>/spendfellow.git
+```
+
+Keeping separate public and private checkouts makes it harder to accidentally push deployment-only state to the public repository.
 
 ## Vercel Setup
 
@@ -144,7 +186,7 @@ Do not set `SUPABASE_SECRET_KEY` as a `NEXT_PUBLIC_` variable. It must remain se
 
 When using Spendfellow as a starting point for your own financial tracker, keep these choices private to your deployment:
 
-1. Create your own Supabase project and run every migration in `supabase/migrations/`.
+1. Create your own Supabase project, link it from the private checkout, and apply the active migrations with `pnpm db:push`.
 2. Create your own Plaid app and set Plaid secrets only in `.env.local` or Vercel environment variables.
 3. Use your own Vercel project and production domain.
 4. Set `NEXT_PUBLIC_APP_URL` and `PLAID_REDIRECT_URI` to the exact deployed HTTPS origin.
@@ -160,10 +202,101 @@ The public repository should contain reusable application code, schema, neutral 
 Each deployment should use its own Supabase project.
 
 1. Create a Supabase project.
-2. Run the migrations in `supabase/migrations/` in filename order.
-3. Configure Supabase Auth.
-4. Disable public/self-service signups if available.
-5. Invite household members from the **Household Access** panel in Spendfellow settings.
+2. Install dependencies and authenticate the pinned Supabase CLI:
+
+   ```bash
+   pnpm install --frozen-lockfile
+   pnpm supabase login
+   ```
+
+3. Link the private checkout to the project. The link is stored under the gitignored `supabase/.temp/` directory:
+
+   ```bash
+   pnpm supabase link --project-ref YOUR_PROJECT_REF
+   ```
+
+4. Preview and apply pending database migrations:
+
+   ```bash
+   pnpm db:push:dry-run
+   pnpm db:push
+   ```
+
+5. Configure Supabase Auth.
+6. Disable public/self-service signups if available.
+7. Invite household members from the **Household Access** panel in Spendfellow settings.
+
+Do not manually paste the files from `supabase/migrations/` into the SQL editor. The CLI records applied migration versions and skips them on later pushes. Files in `supabase/repairs/` are documented, opt-in incident repairs and are not part of fresh setup.
+
+### Adopting the baseline on a manually managed database
+
+If a database already has the current Spendfellow schema because SQL was previously applied by hand, its migration-history table may be empty. Do not run `pnpm db:push` until the live schema has been compared with the baseline.
+
+Start from the public checkout and build the canonical current schema from the complete active migration chain:
+
+```bash
+pnpm db:start
+pnpm db:reset
+pnpm supabase db query --local --file supabase/tests/schema_fingerprint.sql
+pnpm db:stop
+```
+
+From the linked private checkout, fingerprint and dump the existing hosted schema:
+
+```bash
+pnpm supabase db query --linked --file supabase/tests/schema_fingerprint.sql
+pnpm supabase db dump --linked --schema public --file /tmp/spendfellow-production-public-schema.sql
+```
+
+If the fingerprint and object count match, the hosted schema already represents the complete active chain. If either differs, stop and inspect the schema dump. Every difference must be understood before continuing: it must either be non-structural deployment configuration or be corrected by a later active migration that will run after the baseline is recorded. Never push the baseline itself over an existing database.
+
+After completing that comparison, record only the baseline version as already applied and inspect the remaining migration list:
+
+```bash
+pnpm supabase migration repair 20260726120000 --status applied --linked
+pnpm supabase migration list --linked
+pnpm db:push:dry-run
+```
+
+Migration repair changes only Supabase's migration-history table; it does not execute the baseline SQL or alter application data. The migration list and dry run must contain only reviewed post-baseline migrations. Never mark a version applied merely to silence a schema error. This is a one-time transition for a database that was already managed manually; a new empty project should run the baseline normally with `pnpm db:push`.
+
+Spendfellow's first baseline release intentionally follows the baseline with `20260810000000_baseline_compatibility_and_permissions.sql`. That migration fills the small schema gap found in the original manually managed deployment, makes authenticated Data API grants explicit, protects Plaid tokens from authenticated reads, and makes reporting views honor the underlying household RLS policies. It should be the only pending migration immediately after adopting baseline `20260726120000`.
+
+For the first release containing the baseline, use this order:
+
+1. Merge the baseline pull request into public `main`.
+2. Merge public `main` into the private checkout locally, but do not push private `main` yet.
+3. Install dependencies and run the application checks in the private checkout.
+4. Compare the local fingerprint with the linked fingerprint and inspect a linked schema dump when they differ.
+5. Confirm that every difference is either intentional deployment configuration or covered by the reviewed post-baseline compatibility migration.
+6. Record baseline `20260726120000` as applied.
+7. Confirm the migration list and dry run show only `20260810000000_baseline_compatibility_and_permissions.sql`.
+8. Run `pnpm db:push`, then rerun both fingerprints and require them to match.
+9. Push private `main` to trigger Vercel.
+
+If the linked fingerprint cannot run because Supabase cannot create its temporary CLI login role or times out connecting, stop and retry later. That is not evidence that the schemas match, and it is not safe to perform the migration repair while the comparison is unavailable.
+
+For CLI temporary-role or pooler failures, check Database Settings for network bans and database health, then use password-based linking without placing the password in shell history:
+
+```zsh
+read -s "SUPABASE_DB_PASSWORD?Supabase database password: "
+echo
+export SUPABASE_DB_PASSWORD
+pnpm supabase link --project-ref YOUR_PROJECT_REF
+unset SUPABASE_DB_PASSWORD
+```
+
+Do not paste the database password into an issue, pull request, log, or chat. The CLI stores a supplied link password in native credential storage when available.
+
+### Creating future migrations
+
+After the baseline has been adopted, do not edit or replace it. Create a new timestamped migration for every reusable schema change:
+
+```bash
+pnpm supabase migration new descriptive_change_name
+```
+
+Edit the new SQL file, validate the complete migration chain locally, and include it in the public pull request. After that pull request merges, the private deployment workflow applies only the newly pending migration. Put incident-specific or deployment-specific data fixes in `supabase/repairs/`, not in the fresh-install chain.
 
 For Supabase Auth, configure these URLs:
 
