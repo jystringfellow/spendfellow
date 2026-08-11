@@ -250,6 +250,8 @@ pnpm supabase db dump --linked --schema public --file /tmp/spendfellow-productio
 
 If the fingerprint and object count match, the hosted schema already represents the complete active chain. If either differs, stop and inspect the schema dump. Every difference must be understood before continuing: it must either be non-structural deployment configuration or be corrected by a later active migration that will run after the baseline is recorded. Never push the baseline itself over an existing database.
 
+The fingerprint uses stable function signatures for routine grants rather than PostgreSQL's database-specific internal identifiers. It also excludes the optional `pg_net` extension, which is Supabase platform configuration and is not used by SpendFellow. This keeps equivalent local and hosted application schemas comparable without hiding differences in application-owned objects or permissions.
+
 After completing that comparison, record only the baseline version as already applied and inspect the remaining migration list:
 
 ```bash

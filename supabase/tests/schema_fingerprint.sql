@@ -152,7 +152,10 @@ WITH schema_objects AS (
     )::text
   FROM pg_extension extension
   JOIN pg_namespace namespace ON namespace.oid = extension.extnamespace
-  WHERE extension.extname IN ('pg_net', 'pg_stat_statements', 'pgcrypto', 'supabase_vault', 'uuid-ossp')
+  -- pg_net is optional Supabase platform configuration and is not used by the
+  -- application. Existing hosted projects may legitimately omit it even when
+  -- fresh local stacks install it.
+  WHERE extension.extname IN ('pg_stat_statements', 'pgcrypto', 'supabase_vault', 'uuid-ossp')
 
   UNION ALL
 
@@ -174,16 +177,20 @@ WITH schema_objects AS (
   SELECT
     'routine_grant',
     jsonb_build_object(
-      'schema', routine_schema,
-      'routine', routine_name,
-      'specific_name', specific_name,
-      'grantee', grantee,
-      'privilege', privilege_type,
-      'grantable', is_grantable
+      'schema', privilege.routine_schema,
+      'identity', procedure.proname || '(' || pg_get_function_identity_arguments(procedure.oid) || ')',
+      'grantee', privilege.grantee,
+      'privilege', privilege.privilege_type,
+      'grantable', privilege.is_grantable
     )::text
-  FROM information_schema.routine_privileges
-  WHERE routine_schema = 'public'
-    AND grantee IN ('anon', 'authenticated', 'service_role')
+  FROM information_schema.routine_privileges privilege
+  JOIN pg_namespace namespace
+    ON namespace.nspname = privilege.routine_schema
+  JOIN pg_proc procedure
+    ON procedure.pronamespace = namespace.oid
+   AND privilege.specific_name = procedure.proname || '_' || procedure.oid::text
+  WHERE privilege.routine_schema = 'public'
+    AND privilege.grantee IN ('anon', 'authenticated', 'service_role')
 )
 SELECT
   md5(string_agg(object_type || ':' || definition, E'\n' ORDER BY object_type, definition)) AS schema_fingerprint,
