@@ -17,6 +17,7 @@ import ManualTransactionDialog, { type ManualTransactionAccountOption } from '@/
 import type { CreditCardPaymentLinkSummary } from '@/components/transactions/CreditCardPaymentLinkButton';
 import type { FunMoneyAllocationSummary } from '@/components/transactions/FunMoneyAllocationButton';
 import { getCurrentHousehold } from '@/lib/households';
+import { matchAmazonPaymentsToTransactions } from '@/lib/amazonTransactionMatching';
 import { createServerSupabaseClient } from '@/lib/supabaseServer';
 import type {
   AmazonOrder,
@@ -93,16 +94,6 @@ function addDays(date: string, days: number) {
   const parsedDate = new Date(`${date}T00:00:00`);
   parsedDate.setDate(parsedDate.getDate() + days);
   return parsedDate.toISOString().slice(0, 10);
-}
-
-function getDateDistanceDays(left: string | null, right: string) {
-  if (!left) {
-    return Number.POSITIVE_INFINITY;
-  }
-
-  const leftDate = new Date(`${left}T00:00:00`).getTime();
-  const rightDate = new Date(`${right}T00:00:00`).getTime();
-  return Math.abs(Math.round((leftDate - rightDate) / 86_400_000));
 }
 
 function getAmazonMatchAmountCandidates(amountCents: number) {
@@ -438,23 +429,24 @@ export default async function TransactionsPage({ searchParams }: TransactionsPag
       itemsByOrderId.set(item.order_id, [...(itemsByOrderId.get(item.order_id) ?? []), item]);
     });
 
+    const paymentIdByTransactionId = matchAmazonPaymentsToTransactions(
+      uncategorizedTransactionsWithoutPaymentLinks.map((transaction) => ({
+        id: transaction.id,
+        date: transaction.date,
+        amountCents: transaction.amount_cents,
+      })),
+      amazonPayments.map((payment) => ({
+        id: payment.id,
+        transactionDate: payment.transaction_date,
+        amountCents: payment.amount_cents,
+        isRefund: payment.is_refund,
+        plaidTransactionId: payment.plaid_transaction_id,
+      }))
+    );
+    const paymentById = new Map(amazonPayments.map((payment) => [payment.id, payment]));
+
     uncategorizedTransactionsWithoutPaymentLinks.forEach((transaction) => {
-      const exactLinkedPayment = amazonPayments.find((payment) => payment.plaid_transaction_id === transaction.id);
-      const amountCandidatesForTransaction = new Set(getAmazonMatchAmountCandidates(transaction.amount_cents));
-      const candidatePayments = amazonPayments
-        .filter(
-          (payment) =>
-            !payment.plaid_transaction_id &&
-            amountCandidatesForTransaction.has(payment.amount_cents) &&
-            getDateDistanceDays(payment.transaction_date, transaction.date) <= 5
-        )
-        .sort(
-          (left, right) =>
-            getDateDistanceDays(left.transaction_date, transaction.date) -
-              getDateDistanceDays(right.transaction_date, transaction.date) ||
-            (right.transaction_date ?? '').localeCompare(left.transaction_date ?? '')
-        );
-      const match = exactLinkedPayment ?? candidatePayments[0];
+      const match = paymentById.get(paymentIdByTransactionId.get(transaction.id) ?? '');
       if (match) {
         amazonMatchByTransactionId.set(transaction.id, createAmazonMatch(match, orderById, itemsByOrderId));
       }

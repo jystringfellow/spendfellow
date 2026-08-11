@@ -1,6 +1,6 @@
 'use client';
 
-import { KeyboardEvent, useEffect, useMemo, useState } from 'react';
+import { KeyboardEvent, useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import {
   Alert,
@@ -316,19 +316,15 @@ export default function CategorizationModeButton({
   const [tagOptions, setTagOptions] = useState(tags);
   const [budgetGroupOptions, setBudgetGroupOptions] = useState(budgetGroups);
   const [isOpen, setIsOpen] = useState(false);
-  const [currentIndex, setCurrentIndex] = useState(0);
+  const [sessionTransactions, setSessionTransactions] = useState<EditableTransactionRow[]>([]);
+  const [currentTransaction, setCurrentTransaction] = useState<EditableTransactionRow>();
   const [completedIds, setCompletedIds] = useState<Set<string>>(new Set());
   const [skippedIds, setSkippedIds] = useState<Set<string>>(new Set());
   const [skippedHistory, setSkippedHistory] = useState<EditableTransactionRow[]>([]);
-  const [draft, setDraft] = useState<Draft>(() => createDraft(transactions[0]));
+  const [draft, setDraft] = useState<Draft>(() => createDraft(undefined));
   const [isSaving, setIsSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const queue = useMemo(
-    () => transactions.filter((transaction) => !completedIds.has(transaction.id)),
-    [completedIds, transactions]
-  );
-  const currentTransaction = queue[currentIndex] ?? queue[0];
   const incomeCategoryId =
     categories.find((category) => category.is_income && category.name.toLowerCase() === 'income transfers')?.id ??
     categories.find((category) => category.is_income)?.id ??
@@ -358,6 +354,9 @@ export default function CategorizationModeButton({
       amazonItems.length > 1 &&
       inferredRefundItemIds === null
   );
+  const amazonRefundItemMatchFound = Boolean(
+    currentTransaction?.amazon_match?.isRefund && inferredRefundItemIds
+  );
   const amazonSplitDrafts = currentTransaction ? createAmazonSplitDrafts(currentTransaction, incomeCategoryId) : [];
   const singleAmazonItem = getSingleAmazonItem(amazonDisplayItems);
   const amazonDisplayItemSubtotalCents = currentTransaction ? getAmazonDisplayItemSubtotalCents(currentTransaction) : null;
@@ -365,18 +364,20 @@ export default function CategorizationModeButton({
   const amazonBeforeTaxCents = currentTransaction ? getAmazonBeforeTaxCents(currentTransaction) : null;
   const amazonDisplayTaxCents = currentTransaction ? getAmazonDisplayTaxCents(currentTransaction) : null;
   const progressCount = completedIds.size;
-  const totalCount = transactions.length;
+  const totalCount = sessionTransactions.length;
 
   useEffect(() => {
     setBudgetGroupOptions(budgetGroups);
   }, [budgetGroups]);
 
   function openDialog() {
-    setCurrentIndex(0);
+    const nextSessionTransactions = [...transactions];
+    setSessionTransactions(nextSessionTransactions);
+    setCurrentTransaction(nextSessionTransactions[0]);
     setCompletedIds(new Set());
     setSkippedIds(new Set());
     setSkippedHistory([]);
-    setDraft(createDraft(transactions[0]));
+    setDraft(createDraft(nextSessionTransactions[0]));
     setError(null);
     setIsOpen(true);
   }
@@ -387,13 +388,13 @@ export default function CategorizationModeButton({
   }
 
   function moveToNext(nextCompletedIds: Set<string>, nextSkippedIds = skippedIds) {
-    const nextQueue = transactions.filter((transaction) => !nextCompletedIds.has(transaction.id));
-    const nextIndex = Math.min(currentIndex, Math.max(nextQueue.length - 1, 0));
-    const nextTransaction = nextQueue[nextIndex];
+    const nextTransaction = sessionTransactions.find(
+      (transaction) => !nextCompletedIds.has(transaction.id)
+    );
 
     setCompletedIds(nextCompletedIds);
     setSkippedIds(nextSkippedIds);
-    setCurrentIndex(nextIndex);
+    setCurrentTransaction(nextTransaction);
     setDraft(createDraft(nextTransaction));
 
     if (!nextTransaction) {
@@ -551,7 +552,7 @@ export default function CategorizationModeButton({
     setSkippedHistory((currentSkippedHistory) => currentSkippedHistory.slice(0, -1));
     setCompletedIds(nextCompletedIds);
     setSkippedIds(nextSkippedIds);
-    setCurrentIndex(0);
+    setCurrentTransaction(skippedTransaction);
     setDraft(createDraft(skippedTransaction));
     setError(null);
   }
@@ -606,7 +607,19 @@ export default function CategorizationModeButton({
                       <Typography color="text.secondary">{currentTransaction.description}</Typography>
                     ) : null}
                   </Box>
-                  <Typography variant="h6">{formatCurrency(currentTransaction.amount_cents)}</Typography>
+                  <Stack spacing={0.25} alignItems="flex-end">
+                    <Typography
+                      variant="h6"
+                      color={currentTransaction.amount_cents < 0 ? 'success.main' : 'text.primary'}
+                    >
+                      {formatCurrency(Math.abs(currentTransaction.amount_cents))}
+                    </Typography>
+                    <Chip
+                      size="small"
+                      color={currentTransaction.amount_cents < 0 ? 'success' : 'default'}
+                      label={currentTransaction.amount_cents < 0 ? 'Credit · money back' : 'Debit · money out'}
+                    />
+                  </Stack>
                 </Stack>
                 <Stack direction="row" spacing={1} flexWrap="wrap" sx={{ mt: 1 }}>
                   <Chip size="small" label={currentTransaction.date} />
@@ -644,16 +657,30 @@ export default function CategorizationModeButton({
                 <Box
                   sx={{
                     border: 1,
-                    borderColor: 'divider',
+                    borderColor: currentTransaction.amazon_match.isRefund ? 'success.main' : 'divider',
                     borderRadius: 1,
                     p: 1.5,
-                    bgcolor: 'rgba(109, 255, 46, 0.05)',
+                    bgcolor: currentTransaction.amazon_match.isRefund
+                      ? 'rgba(46, 125, 50, 0.06)'
+                      : 'rgba(109, 255, 46, 0.05)',
                   }}
                 >
                   <Stack spacing={1.25}>
+                    {currentTransaction.amazon_match.isRefund ? (
+                      <Alert severity="success" variant="filled">
+                        <Typography variant="subtitle2">Refund credit — not a purchase</Typography>
+                        <Typography variant="body2">
+                          Amazon links refunds to the original order. Order totals and items below are reference
+                          details for identifying what was returned; they are not a new debit.
+                        </Typography>
+                      </Alert>
+                    ) : null}
+
                     <Stack direction={{ xs: 'column', sm: 'row' }} justifyContent="space-between" spacing={1}>
                       <Box>
-                        <Typography variant="subtitle2">Amazon order match</Typography>
+                        <Typography variant="subtitle2">
+                          {currentTransaction.amazon_match.isRefund ? 'Amazon refund match' : 'Amazon purchase match'}
+                        </Typography>
                         <Typography variant="body2" color="text.secondary">
                           Order #{currentTransaction.amazon_match.orderId}
                           {currentTransaction.amazon_match.transactionDate
@@ -665,7 +692,9 @@ export default function CategorizationModeButton({
                         <Chip
                           size="small"
                           color={currentTransaction.amazon_match.isRefund ? 'success' : 'default'}
-                          label={formatCurrency(currentTransaction.amazon_match.amountCents)}
+                          label={`${currentTransaction.amazon_match.isRefund ? 'Refund credit' : 'Purchase debit'} ${formatCurrency(
+                            Math.abs(currentTransaction.amazon_match.amountCents)
+                          )}`}
                         />
                         {currentTransaction.amazon_match.order?.orderDetailUrl ? (
                           <Button
@@ -676,73 +705,88 @@ export default function CategorizationModeButton({
                             size="small"
                             endIcon={<OpenInNewIcon fontSize="small" />}
                           >
-                            Order
+                            {currentTransaction.amazon_match.isRefund ? 'Original order' : 'Order'}
                           </Button>
                         ) : null}
                       </Stack>
                     </Stack>
 
                     {currentTransaction.amazon_match.order ? (
-                      <Stack direction="row" spacing={1} flexWrap="wrap">
-                        {amazonDisplayItemSubtotalCents !== null ? (
-                          <Chip
-                            size="small"
-                            variant="outlined"
-                            label={`Items ${formatCurrency(amazonDisplayItemSubtotalCents)}`}
-                          />
+                      <Stack spacing={0.5}>
+                        {currentTransaction.amazon_match.isRefund ? (
+                          <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 700 }}>
+                            Original order totals (reference only)
+                          </Typography>
                         ) : null}
-                        {currentTransaction.amazon_match.order.shippingCents !== null ? (
-                          <Chip
-                            size="small"
-                            variant="outlined"
-                            label={`Shipping ${formatCurrency(currentTransaction.amazon_match.order.shippingCents)}`}
-                          />
-                        ) : null}
-                        {amazonDisplayDiscountsCents !== null ? (
-                          <Chip
-                            size="small"
-                            variant="outlined"
-                            label={`Discounts ${formatCurrency(amazonDisplayDiscountsCents)}`}
-                          />
-                        ) : null}
-                        {amazonBeforeTaxCents !== null ? (
-                          <Chip
-                            size="small"
-                            variant="outlined"
-                            label={`Before tax ${formatCurrency(amazonBeforeTaxCents)}`}
-                          />
-                        ) : null}
-                        {amazonDisplayTaxCents !== null ? (
-                          <Chip
-                            size="small"
-                            variant="outlined"
-                            label={`Estimated tax ${formatCurrency(amazonDisplayTaxCents)}`}
-                          />
-                        ) : null}
-                        {currentTransaction.amazon_match.order.grandTotalCents !== null ? (
-                          <Chip
-                            size="small"
-                            variant="outlined"
-                            label={`Order total ${formatCurrency(currentTransaction.amazon_match.order.grandTotalCents)}`}
-                          />
-                        ) : null}
+                        <Stack direction="row" spacing={1} flexWrap="wrap">
+                          {amazonDisplayItemSubtotalCents !== null ? (
+                            <Chip
+                              size="small"
+                              variant="outlined"
+                              label={`Items ${formatCurrency(amazonDisplayItemSubtotalCents)}`}
+                            />
+                          ) : null}
+                          {currentTransaction.amazon_match.order.shippingCents !== null ? (
+                            <Chip
+                              size="small"
+                              variant="outlined"
+                              label={`Shipping ${formatCurrency(currentTransaction.amazon_match.order.shippingCents)}`}
+                            />
+                          ) : null}
+                          {amazonDisplayDiscountsCents !== null ? (
+                            <Chip
+                              size="small"
+                              variant="outlined"
+                              label={`Discounts ${formatCurrency(amazonDisplayDiscountsCents)}`}
+                            />
+                          ) : null}
+                          {amazonBeforeTaxCents !== null ? (
+                            <Chip
+                              size="small"
+                              variant="outlined"
+                              label={`Before tax ${formatCurrency(amazonBeforeTaxCents)}`}
+                            />
+                          ) : null}
+                          {amazonDisplayTaxCents !== null ? (
+                            <Chip
+                              size="small"
+                              variant="outlined"
+                              label={`Estimated tax ${formatCurrency(amazonDisplayTaxCents)}`}
+                            />
+                          ) : null}
+                          {currentTransaction.amazon_match.order.grandTotalCents !== null ? (
+                            <Chip
+                              size="small"
+                              variant="outlined"
+                              label={`Order total ${formatCurrency(currentTransaction.amazon_match.order.grandTotalCents)}`}
+                            />
+                          ) : null}
+                        </Stack>
                       </Stack>
                     ) : null}
 
-                    {amazonRefundItemsFiltered ? (
-                      <Typography variant="caption" color="text.secondary">
-                        Likely refunded {amazonDisplayItems.length === 1 ? 'item' : 'items'}, inferred by matching the
-                        refund amount after proportional tax and discount allocation.
-                      </Typography>
-                    ) : amazonRefundItemsAmbiguous ? (
-                      <Typography variant="caption" color="text.secondary">
-                        The refund amount does not identify a unique item, so the full order is shown. Open the order to
-                        confirm what was returned.
+                    {amazonRefundItemsAmbiguous ? (
+                      <Alert severity="warning">
+                        Amazon did not identify a unique returned item from the refund amount. The list below is the
+                        full original order, not a list of newly purchased items. Confirm the return in Amazon before
+                        categorizing it.
+                      </Alert>
+                    ) : amazonRefundItemsFiltered ? (
+                      <Typography variant="body2" color="text.secondary">
+                        The likely returned {amazonDisplayItems.length === 1 ? 'item was' : 'items were'} inferred by
+                        matching the refund amount after tax and discounts.
                       </Typography>
                     ) : null}
 
                     {amazonDisplayItems.length > 0 ? (
                       <Stack spacing={0.75}>
+                        {currentTransaction.amazon_match.isRefund ? (
+                          <Typography variant="subtitle2">
+                            {amazonRefundItemMatchFound
+                              ? `Likely returned ${amazonDisplayItems.length === 1 ? 'item' : 'items'}`
+                              : 'Original order items (reference only)'}
+                          </Typography>
+                        ) : null}
                         {amazonDisplayItems.map((item) => {
                           const itemTotalCents = getAmazonItemTotalCents(item.priceCents, item.quantity);
                           return (

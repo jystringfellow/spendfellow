@@ -110,11 +110,11 @@ export default function AmazonSyncPanel() {
 
   return (
     <Stack spacing={2} alignItems="flex-start">
-      <Typography variant="h6">Amazon Purchase Sync</Typography>
+      <Typography variant="h6">Amazon Purchase &amp; Return Sync</Typography>
       <Typography color="text.secondary">
-        Import Amazon purchase metadata through a user-installed Tampermonkey script. The app creates a short-lived token,
-        then Amazon pages that you manually open send scraped transactions and order details back to this deployment. The
-        sync tab stays open with debug details until you close it.
+        Import Amazon purchase and refund metadata through a user-installed Tampermonkey script. The app creates a
+        short-lived token, then Amazon pages that you manually open send scraped transactions and original-order details
+        back to this deployment. The sync tab stays open with debug details until you close it.
       </Typography>
       {isLocalOrigin ? (
         <Alert severity="info">
@@ -152,7 +152,7 @@ export default function AmazonSyncPanel() {
           disabled={isStarting || !isAllowedOrigin}
           onClick={() => void startSync()}
         >
-          {isStarting ? 'Starting...' : 'Sync Amazon Purchases'}
+          {isStarting ? 'Starting...' : 'Sync Amazon Activity'}
         </Button>
         <Button variant="outlined" startIcon={<VisibilityIcon />} disabled={!isAllowedOrigin} onClick={openPreview}>
           Preview Payload Only
