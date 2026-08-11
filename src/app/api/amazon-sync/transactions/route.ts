@@ -8,6 +8,7 @@ import {
   normalizeOrderId,
   parseAmazonMoneyToCents,
 } from '@/lib/amazonSync';
+import { getAmazonPaymentIdentity } from '@/lib/amazonPaymentIdentity';
 import { createServiceSupabaseClient } from '@/lib/supabaseService';
 
 interface AmazonTransactionBatchPayload {
@@ -29,12 +30,6 @@ interface NormalizedAmazonTransactionRow {
   order_detail_url: string | null;
   raw_text: string | null;
   is_refund: boolean;
-}
-
-function getTransactionIdentity(
-  row: Pick<NormalizedAmazonTransactionRow, 'order_id' | 'amount_cents' | 'payment_method_hint' | 'transaction_date'>
-) {
-  return JSON.stringify([row.order_id, row.amount_cents, row.payment_method_hint ?? null, row.transaction_date ?? null]);
 }
 
 export async function POST(request: NextRequest) {
@@ -76,7 +71,7 @@ export async function POST(request: NextRequest) {
     .filter((row): row is NormalizedAmazonTransactionRow => row !== null);
   const rowByIdentity = new Map<string, NormalizedAmazonTransactionRow>();
   parsedRows.forEach((row) => {
-    rowByIdentity.set(getTransactionIdentity(row), row);
+    rowByIdentity.set(getAmazonPaymentIdentity(row), row);
   });
   const rows = Array.from(rowByIdentity.values());
 
@@ -85,7 +80,7 @@ export async function POST(request: NextRequest) {
     seenOrderIds.length > 0
       ? await serviceSupabase
           .from('amazon_payment_transactions')
-          .select('order_id, amount_cents, payment_method_hint, transaction_date')
+          .select('order_id, amount_cents, payment_method_hint, transaction_date, is_refund')
           .eq('household_id', session.household_id)
           .in('order_id', seenOrderIds)
       : { data: [], error: null };
@@ -101,16 +96,17 @@ export async function POST(request: NextRequest) {
         amount_cents: number;
         payment_method_hint: string | null;
         transaction_date: string | null;
+        is_refund: boolean;
       }>
-    ).map(getTransactionIdentity)
+    ).map(getAmazonPaymentIdentity)
   );
   const existingTransactionCount = rows.filter((row) =>
-    existingTransactionIdentities.has(getTransactionIdentity(row))
+    existingTransactionIdentities.has(getAmazonPaymentIdentity(row))
   ).length;
 
   if (rows.length > 0) {
     const { error } = await serviceSupabase.from('amazon_payment_transactions').upsert(rows, {
-      onConflict: 'household_id,order_id,amount_cents,payment_method_hint,transaction_date',
+      onConflict: 'household_id,order_id,amount_cents,payment_method_hint,transaction_date,is_refund',
     });
 
     if (error) {
