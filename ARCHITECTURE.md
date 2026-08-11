@@ -114,9 +114,12 @@ spendfellow/
 │       ├── useTransactions.ts   # Transaction data hooks
 │       └── useBudgets.ts        # Budget data hooks
 ├── supabase/
-│   ├── migrations/              # SQL migration files
-│   │   └── 20260115000000_initial_schema.sql
-│   └── seed.sql                 # Seed data for development
+│   ├── config.toml              # Shared local Supabase CLI configuration
+│   ├── migrations/              # Baseline and later active migrations
+│   │   └── 20260726120000_baseline.sql
+│   ├── repairs/                 # Opt-in operational data repairs
+│   ├── tests/                   # Schema verification queries
+│   └── seed.sql                 # Intentional no-data seed hook
 ├── public/                      # Static assets
 └── .env.example                 # Environment variables template
 ```
@@ -167,8 +170,9 @@ See [DATABASE_SCHEMA.md](./DATABASE_SCHEMA.md) for complete schema documentation
 1. Clone repository
 2. Install dependencies: `pnpm install`
 3. Configure `.env.local` with Supabase and Plaid credentials
-4. Run migration in Supabase SQL editor
-5. Start dev server: `pnpm dev`
+4. Link the Supabase CLI and apply pending migrations with `pnpm db:push`
+5. Validate schema changes locally with `pnpm db:start`, `pnpm db:reset`, and `pnpm db:lint`
+6. Start dev server: `pnpm dev`
 
 ### Testing
 - Unit tests for utilities (money, dates, etc.)
@@ -185,9 +189,10 @@ See [DATABASE_SCHEMA.md](./DATABASE_SCHEMA.md) for complete schema documentation
 
 ### Supabase Setup
 1. Create project at supabase.com
-2. Run migration file
-3. Configure authentication providers
-4. Copy URL and keys to environment variables
+2. Link the deployment checkout with `pnpm supabase link --project-ref YOUR_PROJECT_REF`
+3. Preview and apply active migrations with `pnpm db:push:dry-run` and `pnpm db:push`
+4. Configure authentication providers
+5. Copy URL and keys to environment variables
 
 ### Vercel Deployment
 1. Push code to GitHub

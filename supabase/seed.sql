@@ -1,0 +1,5 @@
+-- Spendfellow intentionally has no database-level seed data.
+--
+-- After the first owner signs in, use Settings -> Seed constants. That action
+-- creates household-scoped categories and recurring values using the current
+-- application defaults instead of embedding one household's data in SQL.

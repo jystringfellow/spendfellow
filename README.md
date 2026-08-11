@@ -39,7 +39,11 @@ spendfellow/
 │   ├── lib/                 # Supabase, Plaid, money, date, and domain helpers
 │   └── types/               # Database and application types
 ├── scripts/                 # Browser userscripts and supporting scripts
-├── supabase/migrations/     # Ordered database migrations
+├── supabase/
+│   ├── config.toml          # Local Supabase CLI configuration
+│   ├── migrations/          # Current baseline and later schema migrations
+│   ├── repairs/             # Opt-in incident repairs; never fresh-install SQL
+│   └── seed.sql             # Intentional database seed hook
 ├── tests/                   # Node test suite
 ├── DEPLOYMENT.md            # Hosting, Auth, and private-repo setup
 ├── PRODUCT_REQUIREMENTS.md  # Product model and design background
@@ -50,11 +54,14 @@ spendfellow/
 
 ### Prerequisites
 
-- Node.js 18 or newer
+- Node.js 20 or newer
 - pnpm
+- A Docker-compatible runtime for local database validation
 - A Supabase project
 - A Plaid account if you want automatic bank connections
 - Tampermonkey if you want Amazon purchase imports
+
+Docker Desktop and Colima are both supported for the local Supabase stack. They can be installed together, but only one Docker engine should be running at a time.
 
 ### 1. Clone and install
 
@@ -66,12 +73,22 @@ pnpm install
 
 ### 2. Set up Supabase
 
-1. Create a new Supabase project.
-2. Apply **every** SQL file in `supabase/migrations/` in filename order.
+1. Create a new Supabase project and copy its project reference ID.
+2. From the checkout used for deployment, log in, link the project, review the pending SQL, and apply it:
+
+   ```bash
+   pnpm supabase login
+   pnpm supabase link --project-ref YOUR_PROJECT_REF
+   pnpm db:push:dry-run
+   pnpm db:push
+   ```
+
+   When maintaining separate public and private checkouts, link only the private deployment checkout to the hosted project. Local database commands do not require the public checkout to be linked.
+
 3. Configure the site URL, redirect URLs, email templates, and invite-only Auth settings described in [DEPLOYMENT.md](./DEPLOYMENT.md#supabase-setup).
 4. Create or invite the first owner through the Supabase Auth dashboard. After the household is initialized, owners can invite additional members from Spendfellow Settings.
 
-Do not run only the initial migration; later migrations contain the current household, sync, budgeting, import, and security model.
+Do not copy migration files into the Supabase SQL editor. The CLI records applied versions and only pushes migrations that are still pending. Files under `supabase/repairs/` are opt-in historical repairs and must not be run on a fresh project.
 
 ### 3. Configure environment variables
 
@@ -110,7 +127,7 @@ Financial records belong to a household rather than an individual browser sessio
 
 The schema stores money as integer cents to avoid floating-point errors. Transactions remain normalized and are projected into spreadsheet-inspired budget and report views rather than being stored as spreadsheet cells.
 
-The ordered files in `supabase/migrations/` are the authoritative schema history. [DATABASE_SCHEMA.md](./DATABASE_SCHEMA.md) provides additional background, but may not describe every newer migration individually.
+The baseline and later ordered files in `supabase/migrations/` are the authoritative deployable schema. Earlier development history remains available through Git, while incident-specific data corrections live outside the active chain in `supabase/repairs/`. [DATABASE_SCHEMA.md](./DATABASE_SCHEMA.md) provides additional background, but may not describe every newer migration individually.
 
 ## Optional Amazon Purchase Sync
 
@@ -142,12 +159,16 @@ Use the helpers in `src/lib/money.ts` rather than floating-point arithmetic:
 ### Validation
 
 ```bash
+pnpm db:start
+pnpm db:reset
+pnpm db:lint
 pnpm test
 pnpm type-check
 pnpm build
+pnpm db:stop
 ```
 
-The GitHub Actions workflow runs the same test, type-check, and production-build gates for pull requests.
+`pnpm db:reset` destroys only the disposable local database and recreates it from the active migration chain. The GitHub Actions workflow runs the application test, type-check, and production-build gates for pull requests.
 
 ## Deployment
 
@@ -158,7 +179,9 @@ The recommended deployment uses:
 - a household-specific Supabase project; and
 - credentials stored only in local or deployment environment variables.
 
-See [DEPLOYMENT.md](./DEPLOYMENT.md) for the complete setup and update workflow.
+Reusable code, tracked Supabase configuration, and migrations originate in the public repository. The ignored production Supabase link lives only in the private checkout, and Vercel deploys only from the private repository. Database migrations are validated locally, merged publicly, applied from the linked private checkout, and then followed by the private Git push that triggers Vercel.
+
+See [DEPLOYMENT.md](./DEPLOYMENT.md#publishing-public-updates-to-your-private-deployment) for the complete release sequence and [the baseline-adoption guide](./DEPLOYMENT.md#adopting-the-baseline-on-a-manually-managed-database) when converting an existing database from manually executed SQL to CLI-managed migration history.
 
 ## Security
 

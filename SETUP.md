@@ -7,10 +7,13 @@ For Vercel deployment and the public-template/private-deployment repository patt
 ## Prerequisites
 
 Before you begin, ensure you have:
-- **Node.js 18+** and pnpm installed
+- **Node.js 20+** and pnpm installed
+- A **Docker-compatible runtime** for local database validation
 - A **Supabase account** (free tier available at [supabase.com](https://supabase.com))
 - A **Plaid account** (free sandbox at [plaid.com](https://plaid.com))
 - **Git** installed on your system
+
+Docker Desktop and Colima are both supported. If both are installed, run only one Docker engine at a time before using the local Supabase commands.
 
 ## Step 1: Clone the Repository
 
@@ -42,17 +45,24 @@ This will install all required packages including Next.js, React, MUI, Supabase 
 5. Click "Create new project"
 6. Wait for the project to be provisioned (takes ~2 minutes)
 
-### 3.2 Run the Database Migration
+### 3.2 Apply the Database Migrations
 
-1. In your Supabase project dashboard, click on the **SQL Editor** in the left sidebar
-2. Click "New Query"
-3. Open the migration files in `supabase/migrations/` from this repository
-4. Run every `*.sql` file in filename order, starting with `20260115000000_initial_schema.sql`
-5. Copy each file's contents into the Supabase SQL Editor
-6. Click "Run" to execute each migration
-7. You should see "Success. No rows returned" for most migration statements
+From the checkout used for deployment, authenticate the pinned Supabase CLI, link the project, preview the pending migrations, and apply them:
 
-If you already ran an older subset of migrations, run the remaining files in filename order. Most migrations use `IF NOT EXISTS`, `ON CONFLICT`, or compatibility guards where practical, but avoid skipping files unless you have verified the schema already includes that migration's changes.
+```bash
+pnpm supabase login
+pnpm supabase link --project-ref YOUR_PROJECT_REF
+pnpm db:push:dry-run
+pnpm db:push
+```
+
+The project reference is available in the Supabase dashboard URL and project settings. The link is local metadata stored under the ignored `supabase/.temp/` directory.
+
+When using the recommended public-template/private-deployment layout, link only the private checkout to the hosted project. The public checkout can validate migrations against its disposable local database without a production link.
+
+Do not paste files from `supabase/migrations/` into the SQL editor. The CLI records each applied migration version so subsequent pushes execute only new migrations. Files under `supabase/repairs/` are opt-in incident repairs and are not part of a fresh installation.
+
+If this is an existing database whose SQL was previously applied manually, stop here and follow [Adopting the baseline on a manually managed database](./DEPLOYMENT.md#adopting-the-baseline-on-a-manually-managed-database) before running `pnpm db:push`.
 
 ### 3.3 Get Your Supabase Credentials
 
@@ -257,7 +267,7 @@ These credentials will work with any institution in Sandbox mode.
 ### Database Errors
 
 **Problem**: "relation does not exist" errors
-**Solution**: Ensure you ran the migration SQL in Supabase
+**Solution**: Run `pnpm db:push:dry-run` from the linked deployment checkout, review the pending migration list, and then run `pnpm db:push`
 
 **Problem**: "permission denied" errors
 **Solution**: Check Row-Level Security policies are correctly set up
