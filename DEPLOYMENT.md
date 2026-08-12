@@ -108,16 +108,17 @@ pnpm install --frozen-lockfile
 pnpm test
 pnpm type-check
 pnpm build
-pnpm db:push:dry-run
-pnpm db:push
+pnpm db:migrate:linked
 git push origin main
 ```
 
 Use `git merge upstream/main` instead of `--ff-only` only if your private repository intentionally has private commits that are not in the public repository. Prefer keeping private changes small so updates stay easy.
 
-The private checkout must be linked to its production Supabase project before running `db:push`. Apply the database migrations only after the application checks pass, but before pushing private `main`; this keeps schema changes ahead of application code that may depend on them. If Vercel is connected to private `main`, the final Git push triggers the application deployment. Vercel does not run `pnpm db:push` automatically.
+The private checkout must be linked to its production Supabase project before running `db:migrate:linked`. The command shows the linked migration state, runs a dry preview, and requires you to type `APPLY` before it changes the database. It intentionally performs no Git operations and does not deploy the application.
 
-When converting an existing manually managed database to the baseline for the first time, follow [Adopting the baseline on a manually managed database](#adopting-the-baseline-on-a-manually-managed-database) before the `db:push` step.
+Apply database migrations only after the application checks pass, but before pushing private `main`; this keeps schema changes ahead of application code that may depend on them. If Vercel is connected to private `main`, the final Git push triggers the application deployment. Vercel does not run database migrations automatically.
+
+When converting an existing manually managed database to the baseline for the first time, follow [Adopting the baseline on a manually managed database](#adopting-the-baseline-on-a-manually-managed-database) before running `db:migrate:linked`.
 
 ### First sync after adopting the tracked CLI configuration
 
@@ -186,7 +187,7 @@ Do not set `SUPABASE_SECRET_KEY` as a `NEXT_PUBLIC_` variable. It must remain se
 
 When using Spendfellow as a starting point for your own financial tracker, keep these choices private to your deployment:
 
-1. Create your own Supabase project, link it from the private checkout, and apply the active migrations with `pnpm db:push`.
+1. Create your own Supabase project, link it from the private checkout, and apply the active migrations with `pnpm db:migrate:linked`.
 2. Create your own Plaid app and set Plaid secrets only in `.env.local` or Vercel environment variables.
 3. Use your own Vercel project and production domain.
 4. Set `NEXT_PUBLIC_APP_URL` and `PLAID_REDIRECT_URI` to the exact deployed HTTPS origin.
@@ -218,8 +219,7 @@ Each deployment should use its own Supabase project.
 4. Preview and apply pending database migrations:
 
    ```bash
-   pnpm db:push:dry-run
-   pnpm db:push
+   pnpm db:migrate:linked
    ```
 
 5. Configure Supabase Auth.

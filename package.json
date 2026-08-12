@@ -11,6 +11,7 @@
     "db:stop": "supabase stop",
     "db:reset": "supabase db reset --local",
     "db:lint": "supabase db lint --local",
+    "db:migrate:linked": "bash scripts/migrate-linked-database.sh",
     "db:push": "supabase db push",
     "db:push:dry-run": "supabase db push --dry-run",
     "lint": "next lint",

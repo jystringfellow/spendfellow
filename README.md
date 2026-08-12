@@ -79,11 +79,10 @@ pnpm install
    ```bash
    pnpm supabase login
    pnpm supabase link --project-ref YOUR_PROJECT_REF
-   pnpm db:push:dry-run
-   pnpm db:push
+   pnpm db:migrate:linked
    ```
 
-   When maintaining separate public and private checkouts, link only the private deployment checkout to the hosted project. Local database commands do not require the public checkout to be linked.
+   The migration command previews pending changes and requires typed confirmation before applying them. When maintaining separate public and private checkouts, link only the private deployment checkout to the hosted project. Local database commands do not require the public checkout to be linked.
 
 3. Configure the site URL, redirect URLs, email templates, and invite-only Auth settings described in [DEPLOYMENT.md](./DEPLOYMENT.md#supabase-setup).
 4. Create or invite the first owner through the Supabase Auth dashboard. After the household is initialized, owners can invite additional members from Spendfellow Settings.
