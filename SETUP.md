@@ -52,17 +52,16 @@ From the checkout used for deployment, authenticate the pinned Supabase CLI, lin
 ```bash
 pnpm supabase login
 pnpm supabase link --project-ref YOUR_PROJECT_REF
-pnpm db:push:dry-run
-pnpm db:push
+pnpm db:migrate:linked
 ```
 
-The project reference is available in the Supabase dashboard URL and project settings. The link is local metadata stored under the ignored `supabase/.temp/` directory.
+The project reference is available in the Supabase dashboard URL and project settings. The link is local metadata stored under the ignored `supabase/.temp/` directory. `db:migrate:linked` previews pending migrations and requires typed confirmation before applying them.
 
 When using the recommended public-template/private-deployment layout, link only the private checkout to the hosted project. The public checkout can validate migrations against its disposable local database without a production link.
 
 Do not paste files from `supabase/migrations/` into the SQL editor. The CLI records each applied migration version so subsequent pushes execute only new migrations. Files under `supabase/repairs/` are opt-in incident repairs and are not part of a fresh installation.
 
-If this is an existing database whose SQL was previously applied manually, stop here and follow [Adopting the baseline on a manually managed database](./DEPLOYMENT.md#adopting-the-baseline-on-a-manually-managed-database) before running `pnpm db:push`.
+If this is an existing database whose SQL was previously applied manually, stop here and follow [Adopting the baseline on a manually managed database](./DEPLOYMENT.md#adopting-the-baseline-on-a-manually-managed-database) before running `pnpm db:migrate:linked`.
 
 ### 3.3 Get Your Supabase Credentials
 
