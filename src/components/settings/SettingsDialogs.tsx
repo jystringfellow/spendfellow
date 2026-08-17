@@ -254,7 +254,14 @@ export function CategoryDialogButton({
           }
           InputLabelProps={{ shrink: true }}
         />
-        <TextField select name="startMonth" label="Effective from" size="small" defaultValue={startMonth}>
+        <TextField
+          select
+          name="startMonth"
+          label="Effective from"
+          size="small"
+          defaultValue={startMonth}
+          helperText="Replaces later monthly budget values for this category."
+        >
           {monthOptions.map((month) => (
             <MenuItem key={month.value} value={month.value}>
               {month.label}

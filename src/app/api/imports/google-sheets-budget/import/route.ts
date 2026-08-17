@@ -1,5 +1,11 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { resolveCategoryLayout } from '@/lib/categoryLayouts';
+import {
+  getDuplicateSourceSuggestion,
+  getPotentialOriginalSource,
+  normalizeBudgetImportSource,
+} from '@/lib/budgetImportSafety';
+import { parseBudgetImportMode, planBudgetLineImport } from '@/lib/budgetImportLines';
+import { createCategoryLayoutRestorationRows, resolveCategoryLayout } from '@/lib/categoryLayouts';
 import { resolveCategoryBudgetAmount } from '@/lib/constantPeriods';
 import {
   parseGoogleSheetsBudgetWorkbook,
@@ -43,14 +49,6 @@ function parseSelectedSheets(value: FormDataEntryValue | null): string[] {
   }
 }
 
-function normalizeSource(value: FormDataEntryValue | null, fileName: string): string {
-  if (typeof value === 'string' && value.trim()) {
-    return value.trim();
-  }
-
-  return fileName.replace(/\.xlsx$/i, '').trim() || 'google_sheets_budget_import';
-}
-
 function uniqueByName<T extends { name: string }>(values: T[]): T[] {
   const byName = new Map<string, T>();
   values.forEach((value) => {
@@ -91,6 +89,7 @@ export async function POST(request: NextRequest) {
   const file = formData.get('file');
   const yearValue = Number(formData.get('year'));
   const selectedSheets = parseSelectedSheets(formData.get('selectedSheets'));
+  const importMode = parseBudgetImportMode(formData.get('importMode'));
 
   if (!(file instanceof File)) {
     return NextResponse.json({ error: 'Upload an .xlsx file.' }, { status: 400 });
@@ -104,14 +103,73 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: 'Select at least one sheet to import.' }, { status: 400 });
   }
 
-  const source = normalizeSource(formData.get('source'), file.name);
+  if (!importMode) {
+    return NextResponse.json({ error: 'Choose Replace or Merge import mode.' }, { status: 400 });
+  }
+
+  const sourceValue = formData.get('source');
+  const source = normalizeBudgetImportSource(typeof sourceValue === 'string' ? sourceValue : null, file.name);
 
   try {
+    const potentialOriginalSource = getPotentialOriginalSource(source);
+    if (potentialOriginalSource) {
+      const [exactSourceResult, potentialOriginalResult] = await Promise.all([
+        supabase
+          .from('imported_budget_lines')
+          .select('id', { count: 'exact', head: true })
+          .eq('household_id', household.id)
+          .eq('year', yearValue)
+          .eq('source', source),
+        supabase
+          .from('imported_budget_lines')
+          .select('id', { count: 'exact', head: true })
+          .eq('household_id', household.id)
+          .eq('year', yearValue)
+          .eq('source', potentialOriginalSource),
+      ]);
+
+      const sourceRowsError = exactSourceResult.error ?? potentialOriginalResult.error;
+      if (sourceRowsError) {
+        return NextResponse.json({ error: sourceRowsError.message }, { status: 500 });
+      }
+
+      const existingSources = new Set<string>();
+      if ((exactSourceResult.count ?? 0) > 0) {
+        existingSources.add(source);
+      }
+      if ((potentialOriginalResult.count ?? 0) > 0) {
+        existingSources.add(potentialOriginalSource);
+      }
+
+      const suggestedSource = getDuplicateSourceSuggestion(source, existingSources);
+      if (suggestedSource) {
+        return NextResponse.json(
+          {
+            error: `Source “${source}” looks like another download of existing source “${suggestedSource}”. Preview again using the existing source to update it without creating duplicates.`,
+            suggestedSource,
+          },
+          { status: 409 }
+        );
+      }
+    }
+
     const workbook = await parseGoogleSheetsBudgetWorkbook(await file.arrayBuffer(), yearValue);
     const lines = selectedSheets.flatMap((sheetName) => workbook.linesBySheet.get(sheetName) ?? []);
     const importedCategories = selectedSheets.flatMap(
       (sheetName) => workbook.categoriesBySheet.get(sheetName) ?? []
     );
+
+    const { data: existingImportedLineRows, error: existingImportedLinesError } = await supabase
+      .from('imported_budget_lines')
+      .select('id, source_sheet, source_cell, month')
+      .eq('household_id', household.id)
+      .eq('year', yearValue)
+      .eq('source', source)
+      .limit(10000);
+
+    if (existingImportedLinesError) {
+      return NextResponse.json({ error: existingImportedLinesError.message }, { status: 500 });
+    }
 
     if (importedCategories.length === 0) {
       return NextResponse.json(
@@ -319,42 +377,28 @@ export async function POST(request: NextRequest) {
             : isImportedGroup
               ? groupOrderByName.get(category.name) ?? fallback?.sortOrder ?? category.sort_order ?? 0
               : fallback?.sortOrder ?? category.sort_order ?? 0,
-          is_visible: Boolean(snapshot || isImportedGroup),
+          is_visible: snapshot || isImportedGroup
+            ? true
+            : importMode === 'merge' && preExistingCategoryIds.has(category.id)
+              ? fallback?.isVisible ?? true
+              : false,
           notes: `Imported layout from ${source}`,
         };
       });
     });
     const restorationLayoutRows = restorationMonths.flatMap((restorationMonth) => {
-      const preImportLayoutByCategoryId = new Map(
-        resolveCategoryLayout(
-          preImportCategories,
-          preImportLayouts,
-          restorationMonth.year,
-          restorationMonth.month
-        ).map((layout) => [layout.category.id, layout])
-      );
-
-      return allCategories.map((category) => {
-        const fallback = preImportLayoutByCategoryId.get(category.id);
-        const exactPeriod =
-          fallback?.period?.start_year === restorationMonth.year &&
-          fallback.period.start_month === restorationMonth.month
-            ? fallback.period
-            : null;
-
-        return {
-          household_id: household.id,
-          category_id: category.id,
-          parent_category_id: fallback?.parentCategoryId ?? category.parent_category_id,
-          start_year: restorationMonth.year,
-          start_month: restorationMonth.month,
-          end_year: exactPeriod?.end_year ?? null,
-          end_month: exactPeriod?.end_month ?? null,
-          sort_order: fallback?.sortOrder ?? category.sort_order ?? 0,
-          is_visible: preExistingCategoryIds.has(category.id) ? fallback?.isVisible ?? true : false,
-          notes: exactPeriod?.notes ?? `Restored layout after ${source} import`,
-        };
-      });
+      return createCategoryLayoutRestorationRows(
+        allCategories,
+        preImportCategories,
+        preImportLayouts,
+        preExistingCategoryIds,
+        restorationMonth.year,
+        restorationMonth.month,
+        `Restored layout after ${source} import`
+      ).map((row) => ({
+        household_id: household.id,
+        ...row,
+      }));
     });
     const layoutRows = [...selectedLayoutRows, ...restorationLayoutRows];
 
@@ -446,6 +490,13 @@ export async function POST(request: NextRequest) {
       })
       .filter((row): row is NonNullable<typeof row> => row !== null);
 
+    const linePlan = planBudgetLineImport(
+      rows,
+      existingImportedLineRows ?? [],
+      importedMonths,
+      importMode
+    );
+
     if (rows.length > 0) {
       const { error: lineUpsertError } = await supabase.from('imported_budget_lines').upsert(rows, {
         onConflict: 'household_id,source,source_sheet,source_cell',
@@ -456,8 +507,29 @@ export async function POST(request: NextRequest) {
       }
     }
 
+    // Replace is deliberately ordered after every write above. If anything fails,
+    // stale lines remain available for another attempt instead of being lost.
+    for (let index = 0; index < linePlan.deleteIds.length; index += 500) {
+      const deleteIds = linePlan.deleteIds.slice(index, index + 500);
+      const { error: lineDeleteError } = await supabase
+        .from('imported_budget_lines')
+        .delete()
+        .eq('household_id', household.id)
+        .eq('year', yearValue)
+        .eq('source', source)
+        .in('id', deleteIds);
+
+      if (lineDeleteError) {
+        return NextResponse.json({ error: lineDeleteError.message }, { status: 500 });
+      }
+    }
+
     return NextResponse.json({
       importedCount: rows.length,
+      insertedCount: linePlan.insertCount,
+      updatedCount: linePlan.updateCount,
+      deletedCount: linePlan.deleteIds.length,
+      importMode,
       selectedSheets,
       source,
     });

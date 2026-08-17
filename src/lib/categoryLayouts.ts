@@ -8,6 +8,18 @@ export interface EffectiveCategoryLayout {
   period: CategoryLayoutPeriod | null;
 }
 
+export interface CategoryLayoutRestorationRow {
+  category_id: string;
+  parent_category_id: string | null;
+  start_year: number;
+  start_month: number;
+  end_year: null;
+  end_month: null;
+  sort_order: number;
+  is_visible: boolean;
+  notes: string;
+}
+
 function periodIndex(year: number, month: number): number {
   return year * 12 + month;
 }
@@ -47,6 +59,46 @@ export function resolveCategoryLayout(
       sortOrder: period ? period.sort_order : category.sort_order ?? 0,
       isVisible: period ? period.is_visible : !hasAnyEffectivePeriod,
       period,
+    };
+  });
+}
+
+export function createCategoryLayoutRestorationRows(
+  allCategories: Category[],
+  preImportCategories: Category[],
+  preImportLayouts: CategoryLayoutPeriod[],
+  preExistingCategoryIds: Set<string>,
+  year: number,
+  month: number,
+  notes: string
+): CategoryLayoutRestorationRow[] {
+  // Finite periods are historical month snapshots and will continue to
+  // override this restoration during their own ranges. Restore from only the
+  // underlying open-ended timeline so a partial import cannot leak a finite
+  // month's column layout into all later months.
+  const underlyingLayouts = preImportLayouts.filter(
+    (period) => period.end_year === null && period.end_month === null
+  );
+  const fallbackByCategoryId = new Map(
+    resolveCategoryLayout(preImportCategories, underlyingLayouts, year, month).map((layout) => [
+      layout.category.id,
+      layout,
+    ])
+  );
+
+  return allCategories.map((category) => {
+    const fallback = fallbackByCategoryId.get(category.id);
+
+    return {
+      category_id: category.id,
+      parent_category_id: fallback?.parentCategoryId ?? category.parent_category_id,
+      start_year: year,
+      start_month: month,
+      end_year: null,
+      end_month: null,
+      sort_order: fallback?.sortOrder ?? category.sort_order ?? 0,
+      is_visible: preExistingCategoryIds.has(category.id) ? fallback?.isVisible ?? true : false,
+      notes,
     };
   });
 }

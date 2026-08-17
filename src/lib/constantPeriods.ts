@@ -6,6 +6,12 @@ export interface ResolvedPeriodAmount<TPeriod> {
   period: TPeriod | null;
 }
 
+export interface DatedPeriod {
+  id: string;
+  year: number;
+  start_month: number;
+}
+
 export const monthOptions = [
   { value: 1, label: 'Jan' },
   { value: 2, label: 'Feb' },
@@ -38,6 +44,20 @@ export function clampMonth(month: number): number {
   }
 
   return month;
+}
+
+export function getSupersededPeriodIds(
+  periods: DatedPeriod[],
+  effectiveYear: number,
+  effectiveStartMonth: number
+): string[] {
+  return periods
+    .filter(
+      (period) =>
+        period.year > effectiveYear ||
+        (period.year === effectiveYear && period.start_month > effectiveStartMonth)
+    )
+    .map((period) => period.id);
 }
 
 export function resolveCategoryBudgetAmount(

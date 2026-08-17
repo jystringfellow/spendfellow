@@ -46,6 +46,11 @@ export interface ImportPreviewSheet {
   lineCount: number;
   commentedLineCount: number;
   categories: string[];
+  categoryBudgets: Array<{
+    categoryName: string;
+    groupName: string;
+    amountCents: number;
+  }>;
   sampleLines: Array<{
     cell: string;
     categoryName: string;
@@ -510,6 +515,11 @@ export async function parseGoogleSheetsBudgetWorkbook(buffer: ArrayBuffer, year:
       lineCount: lines.length,
       commentedLineCount,
       categories,
+      categoryBudgets: parsedSheet.categories.map((category) => ({
+        categoryName: category.categoryName,
+        groupName: category.groupName,
+        amountCents: category.defaultMonthlyBudgetCents,
+      })),
       sampleLines: lines.slice(0, 5).map((line) => ({
         cell: line.source_cell,
         categoryName: line.categoryName,

@@ -2,6 +2,7 @@
 
 import { revalidatePath } from 'next/cache';
 import { parseCurrencyToCents } from '@/lib/money';
+import { getSupersededPeriodIds } from '@/lib/constantPeriods';
 import { createServerSupabaseClient } from '@/lib/supabaseServer';
 import { hasSupabaseEnv } from '@/lib/supabaseEnv';
 
@@ -232,6 +233,31 @@ export async function updateCategorySettings(formData: FormData) {
 
   if (periodError) {
     throw new Error(periodError.message);
+  }
+
+  const { data: laterPeriodRows, error: laterPeriodsError } = await supabase
+    .from('category_budget_periods')
+    .select('id, year, start_month')
+    .eq('household_id', householdId)
+    .eq('category_id', categoryId)
+    .gte('year', year);
+
+  if (laterPeriodsError) {
+    throw new Error(laterPeriodsError.message);
+  }
+
+  const supersededPeriodIds = getSupersededPeriodIds(laterPeriodRows ?? [], year, startMonth);
+  if (supersededPeriodIds.length > 0) {
+    const { error: deleteLaterPeriodsError } = await supabase
+      .from('category_budget_periods')
+      .delete()
+      .eq('household_id', householdId)
+      .eq('category_id', categoryId)
+      .in('id', supersededPeriodIds);
+
+    if (deleteLaterPeriodsError) {
+      throw new Error(deleteLaterPeriodsError.message);
+    }
   }
 
   const { error: layoutPeriodError } = await supabase.from('category_layout_periods').upsert(
