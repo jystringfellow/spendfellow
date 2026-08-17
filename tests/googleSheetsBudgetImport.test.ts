@@ -32,6 +32,9 @@ test('imports category headers even when a month has no transaction rows', async
   assert.equal(workbook.sheets[0]?.importable, true);
   assert.equal(workbook.sheets[0]?.lineCount, 0);
   assert.deepEqual(workbook.sheets[0]?.categories, ['Bills']);
+  assert.deepEqual(workbook.sheets[0]?.categoryBudgets, [
+    { categoryName: 'Bills', groupName: 'Needs', amountCents: 12_500 },
+  ]);
   assert.equal(workbook.categoriesBySheet.get('Jan')?.[0]?.defaultMonthlyBudgetCents, 12_500);
   assert.deepEqual(workbook.linesBySheet.get('Jan'), []);
 });
