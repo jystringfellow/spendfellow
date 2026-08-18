@@ -4,6 +4,7 @@ import {
   addDaysToIsoDate,
   applyTransactionDirection,
   getCreditCardPaymentRoles,
+  isCreditCardPaymentTransaction,
   isIsoDate,
   normalizeLedgerText,
 } from '../src/lib/transactionLedger';
@@ -22,6 +23,13 @@ test('recognizes an equal-and-opposite checking to credit-card payment', () => {
     ),
     { checkingTransactionId: 'checking-side', creditTransactionId: 'credit-side' }
   );
+});
+
+test('recognizes either posted ledger side as eligible for a one-sided CC payment mark', () => {
+  assert.equal(isCreditCardPaymentTransaction({ amountCents: 12_345, accountType: 'depository' }), true);
+  assert.equal(isCreditCardPaymentTransaction({ amountCents: -12_345, accountType: 'credit' }), true);
+  assert.equal(isCreditCardPaymentTransaction({ amountCents: -12_345, accountType: 'depository' }), false);
+  assert.equal(isCreditCardPaymentTransaction({ amountCents: 12_345, accountType: 'credit' }), false);
 });
 
 test('rejects mismatched amounts and incorrect account roles', () => {

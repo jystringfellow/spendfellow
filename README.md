@@ -12,7 +12,7 @@ The reusable application lives in this public repository. Each household should 
 - **Household access**: Invite-only authentication, shared household data, owner-managed invitations, and member removal.
 - **Plaid and manual accounts**: Connect bank and credit-card accounts through Plaid or add accounts such as cash manually.
 - **Transaction workflow**: Sync or manually enter transactions, then filter, search, categorize, split, tag, and annotate them.
-- **Credit-card payments**: Link checking-account payments to the matching credit-card transactions without counting the transfer as new spending.
+- **Credit-card payments**: Link equal-and-opposite checking/card transactions, or mark an unmatched side by itself, without counting the cash transfer as new spending.
 - **Monthly budgeting**: Organize categories into workbook-style groups, set effective monthly budgets, and maintain recurring values and formulas.
 - **Budget reports**: Review monthly budget-versus-actual results, yearly rollups, balances, cash flow, and uncategorized work.
 - **Amazon purchase imports**: Use an optional Tampermonkey userscript to import payment transactions and order-item details for more useful splits and refund review.

@@ -36,7 +36,13 @@ import FunMoneyAllocationButton, {
 } from './FunMoneyAllocationButton';
 import ManualTransactionDialog, { type ManualTransactionAccountOption } from './ManualTransactionDialog';
 import TagAutocomplete from './TagAutocomplete';
-import type { BudgetTransactionGroup, Category, Tag, Transaction } from '@/types/database';
+import type {
+  BudgetTransactionGroup,
+  Category,
+  Tag,
+  Transaction,
+  TransactionBudgetExclusion,
+} from '@/types/database';
 
 const CREATE_BUDGET_GROUP_VALUE = '__create_budget_group__';
 
@@ -50,6 +56,7 @@ export interface EditableTransactionRow extends Transaction {
   transaction_tag_ids: string[];
   transaction_split_count: number;
   credit_card_payment_link?: CreditCardPaymentLinkSummary | null;
+  budget_exclusion?: TransactionBudgetExclusion | null;
   fun_money_allocations: FunMoneyAllocationSummary[];
   budget_group: Pick<BudgetTransactionGroup, 'id' | 'name'> | null;
 }
@@ -630,8 +637,13 @@ export default function TransactionsTable({
                       />
                     ) : null}
                     {transaction.source === 'manual' ? <Chip size="small" variant="outlined" label="Manual" /> : null}
-                    {transaction.credit_card_payment_link ? (
-                      <Chip size="small" color="secondary" variant="outlined" label="CC payment" />
+                    {transaction.credit_card_payment_link || transaction.budget_exclusion ? (
+                      <Chip
+                        size="small"
+                        color="secondary"
+                        variant="outlined"
+                        label={transaction.credit_card_payment_link ? 'CC payment · linked' : 'CC payment'}
+                      />
                     ) : null}
                   </Stack>
                   {transaction.merchant_name ? (
@@ -717,6 +729,7 @@ export default function TransactionsTable({
                   <CreditCardPaymentLinkButton
                     transactionId={transaction.id}
                     link={transaction.credit_card_payment_link ?? null}
+                    marked={transaction.budget_exclusion?.reason === 'credit_card_payment'}
                     eligible={
                       !transaction.pending &&
                       ((transaction.accounts?.type === 'depository' && transaction.amount_cents > 0) ||
@@ -733,7 +746,8 @@ export default function TransactionsTable({
                     eligible={
                       !transaction.pending &&
                       transaction.amount_cents < 0 &&
-                      !transaction.credit_card_payment_link
+                      !transaction.credit_card_payment_link &&
+                      !transaction.budget_exclusion
                     }
                   />
                 </Stack>
