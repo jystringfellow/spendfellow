@@ -37,7 +37,7 @@ function sumActivity(
 ): number {
   return activity
     .filter((line) => line.category_id === categoryId && line.date >= startDate && line.date <= endDate)
-    .reduce((total, line) => total + Math.abs(line.amount_cents), 0);
+    .reduce((total, line) => total + line.amount_cents, 0);
 }
 
 function sumAdjustments(

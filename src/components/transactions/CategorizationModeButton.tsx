@@ -538,6 +538,16 @@ export default function CategorizationModeButton({
     moveToNext(nextCompletedIds);
   }
 
+  function completeCurrentAfterPaymentMark() {
+    if (!currentTransaction) {
+      return;
+    }
+
+    const nextCompletedIds = new Set(completedIds);
+    nextCompletedIds.add(currentTransaction.id);
+    moveToNext(nextCompletedIds);
+  }
+
   function goBackToSkipped() {
     const skippedTransaction = skippedHistory[skippedHistory.length - 1];
     if (!skippedTransaction) {
@@ -631,12 +641,14 @@ export default function CategorizationModeButton({
               <CreditCardPaymentLinkButton
                 transactionId={currentTransaction.id}
                 link={currentTransaction.credit_card_payment_link ?? null}
+                marked={currentTransaction.budget_exclusion?.reason === 'credit_card_payment'}
                 eligible={
                   !currentTransaction.pending &&
                   ((currentTransaction.accounts?.type === 'depository' && currentTransaction.amount_cents > 0) ||
                     (currentTransaction.accounts?.type === 'credit' && currentTransaction.amount_cents < 0))
                 }
                 onLinked={completeCurrentAfterPaymentLink}
+                onMarked={completeCurrentAfterPaymentMark}
               />
 
               <FunMoneyAllocationButton
@@ -649,7 +661,8 @@ export default function CategorizationModeButton({
                 eligible={
                   !currentTransaction.pending &&
                   currentTransaction.amount_cents < 0 &&
-                  !currentTransaction.credit_card_payment_link
+                  !currentTransaction.credit_card_payment_link &&
+                  !currentTransaction.budget_exclusion
                 }
               />
 

@@ -268,6 +268,16 @@ export interface CreditCardPaymentLink {
   created_at: string;
 }
 
+export type TransactionBudgetExclusionReason = 'credit_card_payment';
+
+export interface TransactionBudgetExclusion {
+  transaction_id: string;
+  household_id: string;
+  reason: TransactionBudgetExclusionReason;
+  created_by: string;
+  created_at: string;
+}
+
 export interface BudgetTransactionGroup {
   id: string;
   household_id: string;

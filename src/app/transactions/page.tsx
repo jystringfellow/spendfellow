@@ -27,6 +27,7 @@ import type {
   BudgetTransactionGroupMember,
   Category,
   Tag,
+  TransactionBudgetExclusion,
   TransactionTag,
 } from '@/types/database';
 
@@ -314,16 +315,23 @@ export default async function TransactionsPage({ searchParams }: TransactionsPag
       allocation,
     ]);
   });
-  const { data: paymentLinkRows } =
+  const [{ data: paymentLinkRows }, { data: budgetExclusionRows }] =
     household && loadedTransactionIds.length > 0
-      ? await supabase
-          .from('credit_card_payment_links')
-          .select('id, checking_transaction_id, credit_transaction_id')
-          .eq('household_id', household.id)
-          .or(
-            `checking_transaction_id.in.(${loadedTransactionIds.join(',')}),credit_transaction_id.in.(${loadedTransactionIds.join(',')})`
-          )
-      : { data: [] };
+      ? await Promise.all([
+          supabase
+            .from('credit_card_payment_links')
+            .select('id, checking_transaction_id, credit_transaction_id')
+            .eq('household_id', household.id)
+            .or(
+              `checking_transaction_id.in.(${loadedTransactionIds.join(',')}),credit_transaction_id.in.(${loadedTransactionIds.join(',')})`
+            ),
+          supabase
+            .from('transaction_budget_exclusions')
+            .select('transaction_id, household_id, reason, created_by, created_at')
+            .eq('household_id', household.id)
+            .in('transaction_id', loadedTransactionIds),
+        ])
+      : [{ data: [] }, { data: [] }];
   const paymentLinks = (paymentLinkRows ?? []) as Array<{
     id: string;
     checking_transaction_id: string;
@@ -351,6 +359,12 @@ export default async function TransactionsPage({ searchParams }: TransactionsPag
     }>).map((transaction) => [transaction.id, transaction])
   );
   const paymentLinkByTransactionId = new Map<string, CreditCardPaymentLinkSummary>();
+  const budgetExclusionByTransactionId = new Map(
+    ((budgetExclusionRows ?? []) as TransactionBudgetExclusion[]).map((exclusion) => [
+      exclusion.transaction_id,
+      exclusion,
+    ])
+  );
   paymentLinks.forEach((link) => {
     const checkingTransaction = linkedTransactionById.get(link.checking_transaction_id);
     const creditTransaction = linkedTransactionById.get(link.credit_transaction_id);
@@ -373,26 +387,33 @@ export default async function TransactionsPage({ searchParams }: TransactionsPag
       },
     });
   });
-  const transactionsWithPaymentLinks = transactions.map((transaction) => ({
+  const transactionsWithPaymentMetadata = transactions.map((transaction) => ({
     ...transaction,
     budget_group: budgetGroupById.get(budgetGroupIdByTransactionId.get(transaction.id) ?? '') ?? null,
     credit_card_payment_link: paymentLinkByTransactionId.get(transaction.id) ?? null,
+    budget_exclusion: budgetExclusionByTransactionId.get(transaction.id) ?? null,
     fun_money_allocations: funMoneyAllocationsByTransactionId.get(transaction.id) ?? [],
   }));
-  const uncategorizedTransactionsWithoutPaymentLinks = uncategorizedTransactions
+  const uncategorizedTransactionsWithoutPayments = uncategorizedTransactions
     .map((transaction) => ({
       ...transaction,
       budget_group: budgetGroupById.get(budgetGroupIdByTransactionId.get(transaction.id) ?? '') ?? null,
+      credit_card_payment_link: paymentLinkByTransactionId.get(transaction.id) ?? null,
+      budget_exclusion: budgetExclusionByTransactionId.get(transaction.id) ?? null,
       fun_money_allocations: funMoneyAllocationsByTransactionId.get(transaction.id) ?? [],
     }))
-    .filter((transaction) => !paymentLinkByTransactionId.has(transaction.id));
+    .filter(
+      (transaction) =>
+        !paymentLinkByTransactionId.has(transaction.id) &&
+        !budgetExclusionByTransactionId.has(transaction.id)
+    );
 
   const amazonMatchByTransactionId = new Map<string, AmazonTransactionMatch>();
-  if (household && uncategorizedTransactionsWithoutPaymentLinks.length > 0) {
-    const dates = uncategorizedTransactionsWithoutPaymentLinks.map((transaction) => transaction.date).sort();
+  if (household && uncategorizedTransactionsWithoutPayments.length > 0) {
+    const dates = uncategorizedTransactionsWithoutPayments.map((transaction) => transaction.date).sort();
     const amountCandidates = Array.from(
       new Set(
-        uncategorizedTransactionsWithoutPaymentLinks.flatMap((transaction) =>
+        uncategorizedTransactionsWithoutPayments.flatMap((transaction) =>
           getAmazonMatchAmountCandidates(transaction.amount_cents)
         )
       )
@@ -430,7 +451,7 @@ export default async function TransactionsPage({ searchParams }: TransactionsPag
     });
 
     const paymentIdByTransactionId = matchAmazonPaymentsToTransactions(
-      uncategorizedTransactionsWithoutPaymentLinks.map((transaction) => ({
+      uncategorizedTransactionsWithoutPayments.map((transaction) => ({
         id: transaction.id,
         date: transaction.date,
         amountCents: transaction.amount_cents,
@@ -445,7 +466,7 @@ export default async function TransactionsPage({ searchParams }: TransactionsPag
     );
     const paymentById = new Map(amazonPayments.map((payment) => [payment.id, payment]));
 
-    uncategorizedTransactionsWithoutPaymentLinks.forEach((transaction) => {
+    uncategorizedTransactionsWithoutPayments.forEach((transaction) => {
       const match = paymentById.get(paymentIdByTransactionId.get(transaction.id) ?? '');
       if (match) {
         amazonMatchByTransactionId.set(transaction.id, createAmazonMatch(match, orderById, itemsByOrderId));
@@ -453,7 +474,7 @@ export default async function TransactionsPage({ searchParams }: TransactionsPag
     });
   }
 
-  const uncategorizedTransactionsWithAmazonMatches = uncategorizedTransactionsWithoutPaymentLinks.map((transaction) => ({
+  const uncategorizedTransactionsWithAmazonMatches = uncategorizedTransactionsWithoutPayments.map((transaction) => ({
     ...transaction,
     amazon_match: amazonMatchByTransactionId.get(transaction.id) ?? null,
   }));
@@ -535,7 +556,7 @@ export default async function TransactionsPage({ searchParams }: TransactionsPag
           {transactions.length > 0 ? (
             <>
               <TransactionsTable
-                transactions={transactionsWithPaymentLinks}
+                transactions={transactionsWithPaymentMetadata}
                 categories={categories}
                 tags={tags}
                 accounts={accountOptions}

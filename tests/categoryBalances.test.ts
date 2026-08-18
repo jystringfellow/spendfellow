@@ -99,6 +99,23 @@ test('uses historical monthly budget periods for rollover allotments', () => {
   assert.equal(balance.endingBalanceCents, 85_000);
 });
 
+test('expense credits restore available rollover balance instead of counting as more spend', () => {
+  const balance = calculateRolloverCategoryBalance(
+    category,
+    [],
+    [
+      { category_id: 'fun', date: '2026-01-10', amount_cents: 20_000 },
+      { category_id: 'fun', date: '2026-01-16', amount_cents: -6_327 },
+    ],
+    [],
+    2026,
+    1
+  );
+
+  assert.equal(balance.spentThisMonthCents, 13_673);
+  assert.equal(balance.endingBalanceCents, 21_327);
+});
+
 test('excludes pending adjustments and remains inactive before the configured start', () => {
   const beforeStart = calculateRolloverCategoryBalance(
     { ...category, rollover_start_date: '2026-03-01' },

@@ -6,6 +6,15 @@ export interface CreditCardPaymentTransactionShape {
   accountType: string;
 }
 
+export function isCreditCardPaymentTransaction(
+  transaction: Pick<CreditCardPaymentTransactionShape, 'amountCents' | 'accountType'>
+): boolean {
+  return (
+    (transaction.accountType === 'depository' && transaction.amountCents > 0) ||
+    (transaction.accountType === 'credit' && transaction.amountCents < 0)
+  );
+}
+
 export function isIsoDate(value: unknown): value is string {
   return typeof value === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(value);
 }
@@ -29,10 +38,11 @@ export function getCreditCardPaymentRoles(
   second: CreditCardPaymentTransactionShape
 ): { checkingTransactionId: string; creditTransactionId: string } | null {
   const checking = [first, second].find(
-    (transaction) => transaction.accountType === 'depository' && transaction.amountCents > 0
+    (transaction) =>
+      transaction.accountType === 'depository' && isCreditCardPaymentTransaction(transaction)
   );
   const credit = [first, second].find(
-    (transaction) => transaction.accountType === 'credit' && transaction.amountCents < 0
+    (transaction) => transaction.accountType === 'credit' && isCreditCardPaymentTransaction(transaction)
   );
 
   if (!checking || !credit || checking.amountCents + credit.amountCents !== 0) {

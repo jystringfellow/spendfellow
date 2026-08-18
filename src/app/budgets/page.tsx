@@ -182,8 +182,8 @@ function getActualCents(spendingByCategoryMonth: Map<string, number>, categoryId
   return spendingByCategoryMonth.get(`${categoryId}:${month}`) ?? 0;
 }
 
-function getDisplayActualCents(cents: number): number {
-  return Math.abs(cents);
+function getDisplayActualCents(cents: number, role: CategorySection['role'] = 'expense'): number {
+  return role === 'expense' ? cents : Math.abs(cents);
 }
 
 function getYearRowTotal(spendingByCategoryMonth: Map<string, number>, categoryId: string): number {
@@ -314,7 +314,10 @@ function getMonthlyLineTooltip(line: MonthlyDetailLine): string {
   return note && note !== title ? `${base}\n${note}` : base;
 }
 
-function getMonthlyDisplayLineTooltip(displayLine: MonthlyDisplayLine): string {
+function getMonthlyDisplayLineTooltip(
+  displayLine: MonthlyDisplayLine,
+  role: CategorySection['role']
+): string {
   if (displayLine.lines.length === 1) {
     return getMonthlyLineTooltip(displayLine.lines[0]);
   }
@@ -322,7 +325,9 @@ function getMonthlyDisplayLineTooltip(displayLine: MonthlyDisplayLine): string {
   const firstDate = displayLine.lines[0]?.date;
   const lastDate = displayLine.lines[displayLine.lines.length - 1]?.date;
   const dateRange = firstDate === lastDate ? firstDate : `${firstDate} – ${lastDate}`;
-  const previewLines = displayLine.lines.slice(0, 5).map((line) => `${line.date}: ${formatCurrency(Math.abs(line.amount_cents))}`);
+  const previewLines = displayLine.lines
+    .slice(0, 5)
+    .map((line) => `${line.date}: ${formatSheetAmount(line.amount_cents, role)}`);
   const remainingCount = displayLine.lines.length - previewLines.length;
 
   return [
@@ -365,7 +370,7 @@ function formatSheetExpense(cents: number): string {
     return '$0.00';
   }
 
-  return formatCurrency(-Math.abs(cents));
+  return formatCurrency(-cents);
 }
 
 function formatSheetAmount(cents: number, role: CategorySection['role'] = 'expense'): string {
@@ -399,24 +404,13 @@ function getCategoryBudgetCents(category: Category, periods: CategoryBudgetPerio
 }
 
 function getExpenseVarianceCents(actualCents: number, budgetCents: number): number {
-  return budgetCents - getDisplayActualCents(actualCents);
+  return budgetCents - actualCents;
 }
 
 function getSectionMonthTotal(section: CategorySection, spendingByCategoryMonth: Map<string, number>, month: number): number {
   return section.categories.reduce(
     (total, category) =>
-      total + getDisplayActualCents(getCategoryMonthTotal(spendingByCategoryMonth, category, month)),
-    0
-  );
-}
-
-function getSectionMonthSignedTotal(
-  section: CategorySection,
-  spendingByCategoryMonth: Map<string, number>,
-  month: number
-): number {
-  return section.categories.reduce(
-    (total, category) => total + getCategoryMonthTotal(spendingByCategoryMonth, category, month),
+      total + getDisplayActualCents(getCategoryMonthTotal(spendingByCategoryMonth, category, month), section.role),
     0
   );
 }
@@ -426,7 +420,7 @@ function getMonthlySectionTotal(section: CategorySection, monthlyLinesByCategory
     (total, category) =>
       total +
       (monthlyLinesByCategoryId.get(category.id) ?? []).reduce(
-        (categoryTotal, line) => categoryTotal + getDisplayActualCents(line.amount_cents),
+        (categoryTotal, line) => categoryTotal + getDisplayActualCents(line.amount_cents, section.role),
         0
       ),
     0
@@ -920,13 +914,13 @@ export default async function BudgetsPage({ searchParams }: BudgetsPageProps) {
     const section = sectionsByMonth[monthIndex].find((candidate) =>
       candidate.name.toLowerCase().includes('big')
     );
-    return section ? getSectionMonthSignedTotal(section, spendingByCategoryMonth, monthIndex + 1) : 0;
+    return section ? getSectionMonthTotal(section, spendingByCategoryMonth, monthIndex + 1) : 0;
   });
   const totalSpentNonBigMonthTotals = MONTHS.map(
     (_monthName, monthIndex) => -needsMonthTotals[monthIndex] - wantsMonthTotals[monthIndex]
   );
   const totalSpentMonthTotals = MONTHS.map(
-    (_monthName, monthIndex) => totalSpentNonBigMonthTotals[monthIndex] + bigWantsMonthTotals[monthIndex]
+    (_monthName, monthIndex) => totalSpentNonBigMonthTotals[monthIndex] - bigWantsMonthTotals[monthIndex]
   );
   const cashFlowNonBigMonthTotals = MONTHS.map(
     (_monthName, monthIndex) => incomeMonthTotals[monthIndex] + totalSpentNonBigMonthTotals[monthIndex]
@@ -937,7 +931,7 @@ export default async function BudgetsPage({ searchParams }: BudgetsPageProps) {
   const summaryBalanceRows = getYearBalanceRows(accountSummaries, balanceSnapshots, selectedYear);
   const summaryExpenseSections = expenseSections.filter((section) => section.categories.length > 0);
   const wantsTotalsMonthTotals = MONTHS.map(
-    (_monthName, monthIndex) => -wantsMonthTotals[monthIndex] + bigWantsMonthTotals[monthIndex]
+    (_monthName, monthIndex) => -wantsMonthTotals[monthIndex] - bigWantsMonthTotals[monthIndex]
   );
   const wantsTargetPercent =
     (wantsSummarySection?.targetPercent ?? 0) + (bigWantsSummarySection?.targetPercent ?? 0);
@@ -1065,14 +1059,12 @@ export default async function BudgetsPage({ searchParams }: BudgetsPageProps) {
                       return 0;
                     }
 
-                    return isBigWants
-                      ? getSectionMonthSignedTotal(monthSection, spendingByCategoryMonth, monthIndex + 1)
-                      : getSectionMonthTotal(monthSection, spendingByCategoryMonth, monthIndex + 1);
+                    return getSectionMonthTotal(monthSection, spendingByCategoryMonth, monthIndex + 1);
                   });
                   const sectionTotal = sectionMonthTotals.reduce((total, monthTotal) => total + monthTotal, 0);
                   const formatSectionAmount = (amountCents: number) =>
-                    isBigWants ? formatCurrency(amountCents) : formatSheetAmount(amountCents, section.role);
-                  const sectionPercentageSign = isBigWants ? 1 : -1;
+                    formatSheetAmount(amountCents, section.role);
+                  const sectionPercentageSign = -1;
 
                   return (
                     <Fragment key={section.id}>
@@ -1137,14 +1129,14 @@ export default async function BudgetsPage({ searchParams }: BudgetsPageProps) {
                                 align="right"
                                 sx={getCellBorderSx()}
                               >
-                                {formatCurrency(actualCents)}
+                                {formatSheetExpense(actualCents)}
                               </TableCell>
                             ))}
                             <TableCell align="right" sx={getCellBorderSx()}>
-                              {formatCurrency(rowTotal)}
+                              {formatSheetExpense(rowTotal)}
                             </TableCell>
                             <TableCell align="right" sx={getCellBorderSx()}>
-                              {hasEntries ? formatCurrency(getNonZeroAverage(monthlyActuals)) : 'No entries.'}
+                              {hasEntries ? formatSheetExpense(getNonZeroAverage(monthlyActuals)) : 'No entries.'}
                             </TableCell>
                           </TableRow>
                         );
@@ -1542,13 +1534,26 @@ export default async function BudgetsPage({ searchParams }: BudgetsPageProps) {
                               align="right"
                               sx={{
                                 ...getCellBorderSx(),
-                                bgcolor: line ? (section.role === 'expense' ? '#f4cccc' : '#d9ead3') : '#fff',
-                                color: line ? getDisplayLineFontColor(line) : '#000',
+                                bgcolor: line
+                                  ? section.role === 'expense' && line.amountCents >= 0
+                                    ? '#f4cccc'
+                                    : '#d9ead3'
+                                  : '#fff',
+                                color:
+                                  line && section.role === 'expense' && line.amountCents < 0
+                                    ? '#137333'
+                                    : line
+                                      ? getDisplayLineFontColor(line)
+                                      : '#000',
                               }}
                             >
                               {line ? (
                                 <Tooltip
-                                  title={<Box sx={{ whiteSpace: 'pre-line' }}>{getMonthlyDisplayLineTooltip(line)}</Box>}
+                                  title={
+                                    <Box sx={{ whiteSpace: 'pre-line' }}>
+                                      {getMonthlyDisplayLineTooltip(line, section.role)}
+                                    </Box>
+                                  }
                                   arrow
                                   placement="right"
                                 >
@@ -1577,7 +1582,8 @@ export default async function BudgetsPage({ searchParams }: BudgetsPageProps) {
                     <Fragment key={`${section.id}:totals`}>
                       {section.categories.map((category) => {
                         const total = (monthlyLinesByCategoryId.get(category.id) ?? []).reduce(
-                          (categoryTotal, line) => categoryTotal + getDisplayActualCents(line.amount_cents),
+                          (categoryTotal, line) =>
+                            categoryTotal + getDisplayActualCents(line.amount_cents, section.role),
                           0
                         );
                         return (
@@ -1587,7 +1593,9 @@ export default async function BudgetsPage({ searchParams }: BudgetsPageProps) {
                             sx={{
                               ...getCellBorderSx(),
                               ...getStickyCellSx('bottom', MONTHLY_STICKY_ROW_HEIGHT, 3),
-                              bgcolor: section.role === 'expense' ? '#f4cccc' : '#d9ead3',
+                              bgcolor:
+                                section.role === 'expense' && total >= 0 ? '#f4cccc' : '#d9ead3',
+                              color: section.role === 'expense' && total < 0 ? '#137333' : '#000',
                               borderTop: '3px solid #000',
                               boxShadow: '0 -3px 5px rgba(0, 0, 0, 0.18)',
                               fontWeight: 700,
@@ -1620,7 +1628,8 @@ export default async function BudgetsPage({ searchParams }: BudgetsPageProps) {
                     <Fragment key={`${section.id}:remaining`}>
                       {section.categories.map((category) => {
                         const total = (monthlyLinesByCategoryId.get(category.id) ?? []).reduce(
-                          (categoryTotal, line) => categoryTotal + getDisplayActualCents(line.amount_cents),
+                          (categoryTotal, line) =>
+                            categoryTotal + getDisplayActualCents(line.amount_cents, section.role),
                           0
                         );
                         const remaining =
