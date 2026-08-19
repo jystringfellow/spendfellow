@@ -4,11 +4,16 @@ export interface CreditCardPaymentTransactionShape {
   id: string;
   amountCents: number;
   accountType: string;
+  pending?: boolean;
 }
 
 export function isCreditCardPaymentTransaction(
-  transaction: Pick<CreditCardPaymentTransactionShape, 'amountCents' | 'accountType'>
+  transaction: Pick<CreditCardPaymentTransactionShape, 'amountCents' | 'accountType' | 'pending'>
 ): boolean {
+  if (transaction.pending) {
+    return false;
+  }
+
   return (
     (transaction.accountType === 'depository' && transaction.amountCents > 0) ||
     (transaction.accountType === 'credit' && transaction.amountCents < 0)

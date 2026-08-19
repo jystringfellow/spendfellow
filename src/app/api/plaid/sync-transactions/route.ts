@@ -7,6 +7,11 @@ import { getCurrentHousehold } from '@/lib/households';
 import { dollarsToCents } from '@/lib/money';
 import { fetchTransactions, resolvePlaidEnvironment, PlaidApiError } from '@/lib/plaid';
 import { logPlaidSyncRun } from '@/lib/plaidSyncRuns';
+import {
+  getPendingAwareStartDate,
+  getPlaidPendingTransitions,
+  getRemovedPendingTransactionIds,
+} from '@/lib/plaidTransactionReconciliation';
 import type { Account, PlaidItem } from '@/types/database';
 
 interface AccountLookup {
@@ -21,6 +26,12 @@ interface ExistingTransactionEdits {
   plaid_transaction_id: string | null;
   category_id: string | null;
   notes: string | null;
+}
+
+interface ExistingPendingTransaction {
+  id: string;
+  date: string;
+  plaid_transaction_id: string | null;
 }
 
 interface SyncItemDetail {
@@ -182,7 +193,32 @@ export async function POST(request: NextRequest) {
   try {
     for (const item of scopedPlaidItems) {
       const plaidEnvironment = resolvePlaidEnvironment(item.plaid_environment, item.plaid_access_token);
-      const startDate = getSyncStartDate(item.last_sync_at, payload);
+      const itemAccounts = allAccounts.filter(
+        (account) => (account.plaid_environment === plaidEnvironment || account.plaid_environment === null) && account.plaid_account_id
+      );
+      const eligibleItemAccountIds = eligibleAccounts
+        .filter((account) => account.plaid_item_id === item.plaid_item_id)
+        .map((account) => account.id);
+      const { data: existingPendingRows, error: existingPendingError } =
+        eligibleItemAccountIds.length > 0
+          ? await serviceSupabase
+              .from('transactions')
+              .select('id, date, plaid_transaction_id')
+              .eq('household_id', household.id)
+              .eq('plaid_environment', plaidEnvironment)
+              .eq('pending', true)
+              .in('account_id', eligibleItemAccountIds)
+          : { data: [], error: null };
+
+      if (existingPendingError) {
+        return NextResponse.json({ error: existingPendingError.message }, { status: 500 });
+      }
+
+      const pendingTransactions = (existingPendingRows ?? []) as ExistingPendingTransaction[];
+      const startDate = getPendingAwareStartDate(
+        getSyncStartDate(item.last_sync_at, payload),
+        pendingTransactions.map((transaction) => transaction.date)
+      );
       const endDate = toIsoDate(new Date());
       const runStartedAt = new Date().toISOString();
       const plaidTransactions = await fetchTransactions(
@@ -190,9 +226,6 @@ export async function POST(request: NextRequest) {
         startDate,
         endDate,
         plaidEnvironment
-      );
-      const itemAccounts = allAccounts.filter(
-        (account) => (account.plaid_environment === plaidEnvironment || account.plaid_environment === null) && account.plaid_account_id
       );
       const spendingAccountCount = itemAccounts.filter((account) => isSpendingAccountType(account.type)).length;
       const balanceOnlyAccountCount = itemAccounts.length - spendingAccountCount;
@@ -234,6 +267,7 @@ export async function POST(request: NextRequest) {
         const { data: existingTransactions, error: existingTransactionsError } = await serviceSupabase
           .from('transactions')
           .select('plaid_transaction_id, category_id, notes')
+          .eq('plaid_environment', plaidEnvironment)
           .in('plaid_transaction_id', transactionIds);
 
         if (existingTransactionsError) {
@@ -261,6 +295,44 @@ export async function POST(request: NextRequest) {
 
         if (transactionsError) {
           return NextResponse.json({ error: transactionsError.message }, { status: 500 });
+        }
+
+        const importedPlaidTransactionIds = new Set(transactionIds);
+        const pendingTransitions = getPlaidPendingTransitions(plaidTransactions).filter((transition) =>
+          importedPlaidTransactionIds.has(transition.postedTransactionId)
+        );
+
+        for (const transition of pendingTransitions) {
+          const { error: reconciliationError } = await serviceSupabase.rpc('reconcile_plaid_pending_transaction', {
+            target_plaid_environment: plaidEnvironment,
+            target_pending_transaction_id: transition.pendingTransactionId,
+            target_posted_transaction_id: transition.postedTransactionId,
+          });
+
+          if (reconciliationError) {
+            return NextResponse.json({ error: reconciliationError.message }, { status: 500 });
+          }
+        }
+      }
+
+      const currentPlaidTransactionIds = new Set(
+        transactionRows.map((transaction) => transaction.plaid_transaction_id)
+      );
+      const removedPendingTransactionIds = getRemovedPendingTransactionIds(
+        pendingTransactions,
+        currentPlaidTransactionIds
+      );
+
+      if (removedPendingTransactionIds.length > 0) {
+        const { error: removedPendingError } = await serviceSupabase
+          .from('transactions')
+          .delete()
+          .eq('household_id', household.id)
+          .eq('pending', true)
+          .in('id', removedPendingTransactionIds);
+
+        if (removedPendingError) {
+          return NextResponse.json({ error: removedPendingError.message }, { status: 500 });
         }
       }
 

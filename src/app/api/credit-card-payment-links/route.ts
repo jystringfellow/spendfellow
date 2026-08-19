@@ -1,6 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getCurrentHousehold } from '@/lib/households';
-import { addDaysToIsoDate, getCreditCardPaymentRoles } from '@/lib/transactionLedger';
+import {
+  addDaysToIsoDate,
+  getCreditCardPaymentRoles,
+  isCreditCardPaymentTransaction,
+} from '@/lib/transactionLedger';
 import { createServerSupabaseClient } from '@/lib/supabaseServer';
 import { createServiceSupabaseClient } from '@/lib/supabaseService';
 
@@ -10,6 +14,7 @@ interface LinkTransactionRow {
   account_id: string;
   date: string;
   amount_cents: number;
+  pending: boolean;
   merchant_name: string | null;
   description: string;
   accounts: {
@@ -51,7 +56,7 @@ export async function GET(request: NextRequest) {
   const serviceSupabase = createServiceSupabaseClient();
   const { data: transaction, error: transactionError } = await serviceSupabase
     .from('transactions')
-    .select('id, household_id, account_id, date, amount_cents, merchant_name, description, accounts(name, type)')
+    .select('id, household_id, account_id, date, amount_cents, merchant_name, description, pending, accounts(name, type)')
     .eq('id', transactionId)
     .eq('household_id', household.id)
     .maybeSingle();
@@ -65,9 +70,11 @@ export async function GET(request: NextRequest) {
 
   const source = transaction as unknown as LinkTransactionRow;
   const sourceType = source.accounts?.type;
-  const isEligibleSource =
-    (sourceType === 'depository' && source.amount_cents > 0) ||
-    (sourceType === 'credit' && source.amount_cents < 0);
+  const isEligibleSource = isCreditCardPaymentTransaction({
+    amountCents: source.amount_cents,
+    accountType: sourceType ?? '',
+    pending: source.pending,
+  });
   if (!isEligibleSource) {
     return NextResponse.json({ candidates: [] });
   }
@@ -88,9 +95,10 @@ export async function GET(request: NextRequest) {
   const expectedCounterpartType = sourceType === 'depository' ? 'credit' : 'depository';
   const { data: candidateRows, error: candidatesError } = await serviceSupabase
     .from('transactions')
-    .select('id, household_id, account_id, date, amount_cents, merchant_name, description, accounts(name, type)')
+    .select('id, household_id, account_id, date, amount_cents, merchant_name, description, pending, accounts(name, type)')
     .eq('household_id', household.id)
     .eq('amount_cents', -source.amount_cents)
+    .eq('pending', false)
     .neq('id', source.id)
     .gte('date', addDaysToIsoDate(source.date, -14))
     .lte('date', addDaysToIsoDate(source.date, 14))
@@ -155,7 +163,7 @@ export async function POST(request: NextRequest) {
   const serviceSupabase = createServiceSupabaseClient();
   const { data: transactionRows, error: transactionsError } = await serviceSupabase
     .from('transactions')
-    .select('id, household_id, amount_cents, accounts(name, type)')
+    .select('id, household_id, amount_cents, pending, accounts(name, type)')
     .eq('household_id', household.id)
     .in('id', [payload.transaction_id, payload.counterpart_transaction_id]);
 
@@ -169,11 +177,22 @@ export async function POST(request: NextRequest) {
   const rows = transactionRows as unknown as Array<{
     id: string;
     amount_cents: number;
+    pending: boolean;
     accounts: { type: string } | null;
   }>;
   const roles = getCreditCardPaymentRoles(
-    { id: rows[0].id, amountCents: rows[0].amount_cents, accountType: rows[0].accounts?.type ?? '' },
-    { id: rows[1].id, amountCents: rows[1].amount_cents, accountType: rows[1].accounts?.type ?? '' }
+    {
+      id: rows[0].id,
+      amountCents: rows[0].amount_cents,
+      accountType: rows[0].accounts?.type ?? '',
+      pending: rows[0].pending,
+    },
+    {
+      id: rows[1].id,
+      amountCents: rows[1].amount_cents,
+      accountType: rows[1].accounts?.type ?? '',
+      pending: rows[1].pending,
+    }
   );
 
   if (!roles) {

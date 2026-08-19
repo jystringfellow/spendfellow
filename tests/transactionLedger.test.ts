@@ -32,6 +32,20 @@ test('recognizes either posted ledger side as eligible for a one-sided CC paymen
   assert.equal(isCreditCardPaymentTransaction({ amountCents: 12_345, accountType: 'credit' }), false);
 });
 
+test('does not allow pending transactions to be linked or marked as credit-card payments', () => {
+  assert.equal(
+    isCreditCardPaymentTransaction({ amountCents: 12_345, accountType: 'depository', pending: true }),
+    false
+  );
+  assert.equal(
+    getCreditCardPaymentRoles(
+      { id: 'credit-side', amountCents: -12_345, accountType: 'credit', pending: true },
+      { id: 'checking-side', amountCents: 12_345, accountType: 'depository', pending: false }
+    ),
+    null
+  );
+});
+
 test('rejects mismatched amounts and incorrect account roles', () => {
   assert.equal(
     getCreditCardPaymentRoles(
