@@ -47,24 +47,6 @@ function formatPlaidExitError(error: PlaidLinkError | null, metadata: PlaidLinkO
   return `Plaid Link failed: ${error.error_message ?? 'Unknown error'}${details.length ? ` (${details.join(', ')})` : ''}`;
 }
 
-function formatPlaidEventError(metadata: PlaidLinkOnEventMetadata): string | null {
-  if (!metadata.error_code && !metadata.error_message) {
-    return null;
-  }
-
-  const details = [
-    metadata.error_code ? `code: ${metadata.error_code}` : null,
-    metadata.error_type ? `type: ${metadata.error_type}` : null,
-    metadata.institution_name ? `institution: ${metadata.institution_name}` : null,
-    metadata.request_id ? `request: ${metadata.request_id}` : null,
-    metadata.link_session_id ? `session: ${metadata.link_session_id}` : null,
-  ].filter(Boolean);
-
-  return `Plaid Link error: ${metadata.error_message ?? 'Unknown error'}${
-    details.length ? ` (${details.join(', ')})` : ''
-  }`;
-}
-
 function restorePageScroll() {
   document.documentElement.style.overflow = '';
   document.documentElement.style.position = '';
@@ -85,15 +67,8 @@ function PlaidLinkSession({
   onOpened,
   onSuccess,
 }: PlaidLinkSessionProps) {
-  const stallTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const openedRef = useRef(false);
   const handledCloseRef = useRef(false);
-
-  const clearStallTimer = useCallback(() => {
-    if (stallTimerRef.current) {
-      clearTimeout(stallTimerRef.current);
-      stallTimerRef.current = null;
-    }
-  }, []);
 
   const closeSession = useCallback(() => {
     if (handledCloseRef.current) {
@@ -101,14 +76,13 @@ function PlaidLinkSession({
     }
 
     handledCloseRef.current = true;
-    clearStallTimer();
     restorePageScroll();
     window.setTimeout(restorePageScroll, 0);
     window.setTimeout(restorePageScroll, 250);
     onClosed();
-  }, [clearStallTimer, onClosed]);
+  }, [onClosed]);
 
-  const { open, ready, exit } = usePlaidLink({
+  const { open, ready } = usePlaidLink({
     token,
     onSuccess: (publicToken, metadata) => {
       closeSession();
@@ -128,40 +102,27 @@ function PlaidLinkSession({
       }
 
       console.error('Plaid Link event error', metadata);
-      onError(formatPlaidEventError(metadata));
-      closeSession();
-      exit(true);
     },
     receivedRedirectUri,
   });
 
   useEffect(() => {
-    if (!ready) {
+    if (!ready || openedRef.current) {
       return;
     }
 
+    openedRef.current = true;
     onOpened();
     open();
-    clearStallTimer();
-    stallTimerRef.current = setTimeout(() => {
-      onError('Plaid Link did not continue after 45 seconds. Try a different institution or retry this one later.');
-      closeSession();
-      exit(true);
-    }, 45_000);
-
-    return clearStallTimer;
-  }, [clearStallTimer, closeSession, exit, onError, onOpened, open, ready]);
-
-  useEffect(() => clearStallTimer, [clearStallTimer]);
+  }, [onOpened, open, ready]);
 
   useEffect(() => {
     return () => {
-      clearStallTimer();
       restorePageScroll();
       window.setTimeout(restorePageScroll, 0);
       window.setTimeout(restorePageScroll, 250);
     };
-  }, [clearStallTimer]);
+  }, []);
 
   return null;
 }
