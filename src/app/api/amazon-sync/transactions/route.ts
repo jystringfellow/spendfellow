@@ -155,7 +155,7 @@ export async function POST(request: NextRequest) {
       .map((row) => row.order_id)
   );
   const needed_orders = seenOrderIds
-    .filter((orderId) => payload.forceReindex || !importedOrderIds.has(orderId))
+    .filter((orderId) => /^\d{3}-\d{7}-\d{7}$/.test(orderId) && (payload.forceReindex || !importedOrderIds.has(orderId)))
     .map((orderId) => {
       const source = rows.find((row) => row.order_id === orderId);
       return {

@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Budget App Amazon Sync
 // @namespace    https://github.com/jystringfellow/spendfellow
-// @version      0.1.25
+// @version      0.1.27
 // @description  User-authorized Amazon transaction/order import for a self-hosted budgeting app
 // @match        https://www.amazon.com/*
 // @match        https://www.amazon.com/cpe/yourpayments/transactions*
@@ -19,11 +19,13 @@
 (function () {
   'use strict';
 
-  const SCRIPT_VERSION = '0.1.25';
+  const SCRIPT_VERSION = '0.1.27';
   const STORAGE_KEY = 'budgetAmazonSync';
   const MAX_TRANSACTION_PAGES = 50;
   const MAX_ORDER_DETAILS = 250;
   const REQUEST_TIMEOUT_MS = 30000;
+  const TRANSACTION_LOAD_TIMEOUT_MS = 12000;
+  const TRANSACTION_LOAD_RETRIES = 3;
 
   function getParams() {
     return new URLSearchParams(window.location.search);
@@ -55,11 +57,6 @@
         return null;
       }
 
-      if (stored?.previewOnly && stored.appOrigin === appOrigin && stored.transactionPagesScanned > 0) {
-        stripBudgetSyncParamsFromLocation();
-        return stored;
-      }
-
       const state = {
         appOrigin,
         token: null,
@@ -76,6 +73,7 @@
         transactionsUrl: getCleanTransactionsUrl(),
         nextTransactionsUrl: null,
         transactionPageDebugHistory: [],
+        previewTransactions: [],
       };
       GM_setValue(STORAGE_KEY, JSON.stringify(state));
       stripBudgetSyncParamsFromLocation();
@@ -307,6 +305,44 @@
 
   function showPreviewPayload(title, payload) {
     setStatus(`preview only: ${title}`);
+
+    const panel = getStatusPanel();
+    const actions = document.createElement('div');
+    actions.style.cssText = 'display:flex; gap:8px; flex-wrap:wrap; margin-top:10px';
+
+    const copyButton = document.createElement('button');
+    copyButton.type = 'button';
+    copyButton.textContent = 'Copy payload';
+    copyButton.style.cssText = 'border:1px solid #9ca3af;border-radius:6px;padding:7px 10px;background:#fff;color:#111827;font-weight:600;cursor:pointer';
+    copyButton.addEventListener('click', async () => {
+      try {
+        await navigator.clipboard.writeText(JSON.stringify(payload, null, 2));
+        copyButton.textContent = 'Copied';
+      } catch {
+        copyButton.textContent = 'Copy failed';
+      }
+    });
+    actions.appendChild(copyButton);
+
+    const closeButton = document.createElement('button');
+    closeButton.type = 'button';
+    closeButton.textContent = 'Clear state & close sync tab';
+    closeButton.style.cssText = [
+      'border:0',
+      'border-radius:6px',
+      'padding:7px 10px',
+      'background:#1f6feb',
+      'color:#fff',
+      'font-weight:700',
+      'cursor:pointer',
+    ].join(';');
+    closeButton.addEventListener('click', () => {
+      clearState();
+      window.close();
+    });
+    actions.appendChild(closeButton);
+    panel.appendChild(actions);
+
     let output = document.getElementById('budget-amazon-sync-preview');
     if (!output) {
       output = document.createElement('pre');
@@ -315,7 +351,7 @@
         'position:fixed',
         'left:16px',
         'right:16px',
-        'bottom:88px',
+        'top:20px',
         'z-index:2147483647',
         'max-height:45vh',
         'overflow:auto',
@@ -331,9 +367,28 @@
       document.body.appendChild(output);
     }
 
-    const json = JSON.stringify(payload, null, 2);
-    output.textContent = json;
+    output.textContent = JSON.stringify(payload, null, 2);
     console.log(`Amazon Budget Sync ${title}`, payload);
+  }
+
+  function finishPreview(state, stopReason) {
+    const transactions = state.previewTransactions || [];
+    const lastBatch = state.transactionPageDebugHistory?.[state.transactionPageDebugHistory.length - 1] || null;
+    clearState();
+    showPreviewPayload('transactions payload', {
+      token: 'preview-mode-does-not-create-a-token',
+      pageUrl: window.location.href,
+      cutoffDate: state.cutoffDate,
+      stopReason,
+      batchesScanned: state.transactionPagesScanned,
+      rowCount: transactions.length,
+      datedTransactionCount: transactions.filter((transaction) => transaction.transactionDate).length,
+      parsedTransactionCount: transactions.length,
+      lastVisibleRowCount: lastBatch?.rowCount ?? null,
+      lastScrollDebug: state.lastScrollDebug || null,
+      lastBatchDebug: lastBatch,
+      transactions,
+    });
   }
 
   function isBlockedPage() {
@@ -350,7 +405,7 @@
   }
 
   function extractOrderId(textOrUrl) {
-    const match = String(textOrUrl || '').match(/\b\d{3}-\d{7}-\d{7}\b/);
+    const match = String(textOrUrl || '').match(/\b(?:\d{3}-\d{7}-\d{7}|[a-f\d]{8}-[a-f\d]{4}-[a-f\d]{4}-[a-f\d]{4}-[a-f\d]{12})\b/i);
     return match ? match[0] : null;
   }
 
@@ -483,31 +538,6 @@
       .join('|');
   }
 
-  function waitForTransactionsPageChange(previousSignature, callback, state, attempt) {
-    const currentAttempt = attempt || 0;
-    const currentSignature = getTransactionsPageSignature();
-    if (currentSignature && currentSignature !== previousSignature) {
-      callback();
-      return;
-    }
-
-    if (currentAttempt >= 60) {
-      finishSync(
-        state,
-        'Stopped: next transaction page did not load',
-        JSON.stringify({
-          previousSignature: previousSignature || null,
-          currentSignature: currentSignature || null,
-          pageUrl: window.location.href,
-          paginationDebug: getTransactionPaginationDebug(),
-        })
-      );
-      return;
-    }
-
-    window.setTimeout(() => waitForTransactionsPageChange(previousSignature, callback, state, currentAttempt + 1), 500);
-  }
-
   function postToApp(state, path, body) {
     return new Promise((resolve, reject) => {
       GM_xmlhttpRequest({
@@ -543,36 +573,24 @@
   }
 
   function getTransactionRows() {
-    const lineItemRows = Array.from(document.querySelectorAll('.apx-transactions-line-item-component-container')).filter(
-      (row) => extractOrderId(textOf(row)) && extractMoney(textOf(row))
-    );
-    if (lineItemRows.length > 0) {
-      return lineItemRows;
+    const newRows = Array.from(document.querySelectorAll('[data-testid="transaction-link"]'));
+    if (newRows.length > 0) {
+      return newRows.filter((row) => extractOrderId(textOf(row)) && extractMoney(textOf(row)));
     }
 
-    const orderLinks = Array.from(document.querySelectorAll('a[href*="orderID="], a[href*="orderId="]'));
-    const rows = [];
+    const oldRows = Array.from(document.querySelectorAll('.apx-transactions-line-item-component-container'));
+    if (oldRows.length > 0) {
+      return oldRows.filter((row) => extractOrderId(textOf(row)) && extractMoney(textOf(row)));
+    }
+
     const seen = new Set();
-
-    orderLinks.forEach((link) => {
-      const orderId = extractOrderId(link.href) || extractOrderId(textOf(link));
-      if (!orderId) {
-        return;
-      }
-
-      const row =
-        link.closest('.apx-transactions-line-item-component-container') ||
-        link.closest('[data-testid], [class*="transaction"], [class*="Transaction"], tr, li') ||
-        link.closest('.a-row') ||
-        link.parentElement;
-      if (!row || seen.has(row)) {
-        return;
-      }
-      seen.add(row);
-      rows.push(row);
-    });
-
-    return rows;
+    return Array.from(document.querySelectorAll('a[href*="orderID="], a[href*="orderId="]'))
+      .map((link) => link.closest('tr, li, [class*="transaction" i], .a-row') || link.parentElement)
+      .filter((row) => {
+        if (!row || seen.has(row) || !extractMoney(textOf(row))) return false;
+        seen.add(row);
+        return true;
+      });
   }
 
   function parseTransactionRow(row) {
@@ -582,17 +600,21 @@
     const orderId = extractOrderId(orderDetailUrl) || extractOrderId(rawText);
     const amount = extractMoney(rawText);
     const transactionDate = extractNearbyDate(row);
+    const methodName = textOf(row.querySelector('[data-testid="method-details-name"]'));
+    const methodNumber = textOf(row.querySelector('[data-testid="method-details-number"]'));
     const paymentMatch = rawText.match(
       /\b(?:Prime Visa|Visa|Mastercard|MasterCard|American Express|Amex|Discover|Store Card|Gift Card)\b[^$#]{0,80}/i
     );
-    const merchantMatch = rawText.match(/\b(?:AMZN Mktp US|Amazon\.com|Amazon|Whole Foods)\b/i);
+    const merchantMatch = rawText.match(/AMZN Mktp US|AMAZON MKTPLACE PMTS|Amazon\.com|Whole Foods|Amazon/i);
 
     if (!orderId || !amount) {
       return null;
     }
 
-    const paymentMethodHint = paymentMatch ? paymentMatch[0].replace(/[+-]\s*$/, '').trim() : null;
-    const isRefund = /^\+\$/.test(amount) || /\bRefund\s*:/i.test(rawText);
+    const paymentMethodHint = methodName
+      ? `${methodName}${methodNumber ? ` ${methodNumber}` : ''}`
+      : paymentMatch ? paymentMatch[0].replace(/[+-]\s*$/, '').trim() : null;
+    const isRefund = /^\+\$/.test(amount) || /\bRefund(?:ed)?\b/i.test(rawText);
 
     return {
       orderId,
@@ -600,7 +622,9 @@
       transactionDate,
       paymentMethodHint,
       merchantText: merchantMatch ? merchantMatch[0].trim() : null,
-      orderDetailUrl,
+      orderDetailUrl: orderDetailUrl || (/^\d{3}-\d{7}-\d{7}$/.test(orderId)
+        ? `https://www.amazon.com/gp/css/summary/edit.html?orderID=${encodeURIComponent(orderId)}`
+        : null),
       rawText,
       isRefund,
     };
@@ -673,44 +697,75 @@
     );
   }
 
-  function continueToNextTransactionsPage(state) {
-    if (state.nextTransactionsUrl) {
-      const nextTransactionsUrl = state.nextTransactionsUrl;
-      state.nextTransactionsUrl = null;
-      state.lastTransactionsPageDebug = null;
-      saveState(state);
-      setStatus(
-        'scanning next transaction page...',
-        `${(state.orderQueue || []).length} order details queued so far`
-      );
-      window.location.assign(nextTransactionsUrl);
+  function transactionKey(transaction) {
+    return [transaction.orderId, transaction.amount, transaction.transactionDate, transaction.paymentMethodHint, transaction.isRefund].join('|');
+  }
+
+  function getTransactionScrollContainer(row) {
+    let current = row?.parentElement;
+    while (current && current !== document.body) {
+      const overflow = window.getComputedStyle(current).overflowY;
+      if (/(auto|scroll)/.test(overflow) && current.scrollHeight > current.clientHeight) return current;
+      current = current.parentElement;
+    }
+    return document.scrollingElement || document.documentElement;
+  }
+
+  async function waitForNewTransactions(previousKeys, timeoutMs) {
+    const startedAt = Date.now();
+    while (Date.now() - startedAt < timeoutMs) {
+      await new Promise((resolve) => window.setTimeout(resolve, 300));
+      if (getTransactionRows().some((row) => {
+        const parsed = parseTransactionRow(row);
+        return parsed && !previousKeys.has(transactionKey(parsed));
+      })) return true;
+    }
+    return false;
+  }
+
+  async function continueToNextTransactionsPage(state) {
+    const nextControl = findNextTransactionsControl();
+    if (nextControl) {
+      const previousSignature = getTransactionsPageSignature();
+      nextControl.click();
+      for (let attempt = 0; attempt < 60; attempt += 1) {
+        await new Promise((resolve) => window.setTimeout(resolve, 500));
+        if (getTransactionsPageSignature() && getTransactionsPageSignature() !== previousSignature) {
+          await scanTransactions(state);
+          return true;
+        }
+      }
+      if (state.previewOnly) finishPreview(state, 'next transaction page did not load');
+      else finishSync(state, 'Stopped: next transaction page did not load');
       return true;
     }
 
-    const nextControl = findNextTransactionsControl();
-    if (!nextControl) {
-      return false;
+    const rows = getTransactionRows();
+    const previousKeys = new Set(rows.map(parseTransactionRow).filter(Boolean).map(transactionKey));
+    const scrollContainer = getTransactionScrollContainer(rows[rows.length - 1]);
+    for (let attempt = 0; attempt < TRANSACTION_LOAD_RETRIES; attempt += 1) {
+      setStatus(
+        'loading more transactions...',
+        state.previewOnly
+          ? `${(state.previewTransactions || []).length} unique rows captured`
+          : `${(state.orderQueue || []).length} order details queued so far`
+      );
+      rows[rows.length - 1]?.scrollIntoView({ block: 'end' });
+      scrollContainer.scrollTop = scrollContainer.scrollHeight;
+      state.lastScrollDebug = {
+        containerTag: scrollContainer.tagName,
+        overflowY: window.getComputedStyle(scrollContainer).overflowY,
+        scrollTop: scrollContainer.scrollTop,
+        scrollHeight: scrollContainer.scrollHeight,
+        clientHeight: scrollContainer.clientHeight,
+        attempt: attempt + 1,
+      };
+      if (await waitForNewTransactions(previousKeys, TRANSACTION_LOAD_TIMEOUT_MS / TRANSACTION_LOAD_RETRIES)) {
+        await scanTransactions(state);
+        return true;
+      }
     }
-
-    state.lastTransactionsPageDebug = null;
-    const previousSignature = getTransactionsPageSignature();
-    saveState(state);
-    setStatus(
-      'clicking next transaction page...',
-      `${(state.orderQueue || []).length} order details queued so far`
-    );
-    nextControl.click();
-    waitForTransactionsPageChange(
-      previousSignature,
-      () => {
-        const storedState = loadState();
-        if (storedState && window.location.pathname.includes('/cpe/yourpayments/transactions')) {
-          void scanTransactions(storedState);
-        }
-      },
-      state
-    );
-    return true;
+    return false;
   }
 
   function getTransactionPaginationDebug() {
@@ -732,7 +787,7 @@
       .filter(
         (link) =>
           /\b(?:next|previous)\b|\bpage\s*\d+\b/i.test(link.label) ||
-          /[?&](?:page|offset|start|token)=|pagination|nextPage/i.test(link.href || '')
+          /[?&](?:page|offset|start)=|pagination|nextPage/i.test(link.href || '')
       )
       .map((link) => ({ ...link, label: link.label.slice(0, 300) }))
       .slice(0, 25);
@@ -751,6 +806,10 @@
     }
 
     if (state.transactionPagesScanned >= MAX_TRANSACTION_PAGES) {
+      if (state.previewOnly) {
+        finishPreview(state, '50-batch safety limit reached');
+        return;
+      }
       state.nextTransactionsUrl = null;
       state.stopAfterOrderQueue = '50-page safety limit reached';
       saveState(state);
@@ -772,8 +831,17 @@
     }
 
     setStatus('scanning transactions...');
+    if (getTransactionRows().length === 0) {
+      await waitForNewTransactions(new Set(), TRANSACTION_LOAD_TIMEOUT_MS);
+    }
     const rows = getTransactionRows();
+    if (rows.length === 0) {
+      if (state.previewOnly) finishPreview(state, 'no transaction rows found');
+      else finishSync(state, 'Stopped: no transaction rows found', 'Amazon may still be loading or its transaction layout may have changed.');
+      return;
+    }
     const transactions = [];
+    const seenKeys = new Set(state.seenTransactionKeys || []);
     let reachedCutoff = false;
     const nextPage = findNextTransactionsPage();
     const nextControl = findNextTransactionsControl();
@@ -792,9 +860,13 @@
         return;
       }
 
+      const key = transactionKey(parsed);
+      if (seenKeys.has(key)) return;
+      seenKeys.add(key);
       transactions.push(parsed);
     });
 
+    state.seenTransactionKeys = Array.from(seenKeys);
     state.transactionPagesScanned += 1;
     state.transactionsUrl = getCleanTransactionsUrl();
     state.nextTransactionsUrl = reachedCutoff ? null : nextPage;
@@ -817,40 +889,28 @@
     saveState(state);
 
     if (state.previewOnly) {
-      const datedTransactionCount = transactions.filter((transaction) => transaction.transactionDate).length;
-      showPreviewPayload('transactions payload', {
-        token: 'preview-mode-does-not-create-a-token',
-        pageUrl: window.location.href,
-        cutoffDate: state.cutoffDate,
-        datedTransactionCount,
-        rowCount: rows.length,
-        orderLinkCount,
-        parsedTransactionCount: transactions.length,
-        forceReindex: Boolean(state.forceReindex),
-        nextTransactionsUrl: state.nextTransactionsUrl,
-        nextTransactionsLinkFound: Boolean(nextPage),
-        nextTransactionsControlFound: Boolean(nextControl),
-        nextTransactionsControlLabel: nextControlLabel,
-        paginationDebug,
-        reachedCutoff,
-        note: state.cutoffDate
-          ? 'Cutoff filtering requires transaction dates. If datedTransactionCount is 0, Amazon did not expose dates in the parsed transaction rows.'
-          : 'No cutoff date was supplied.',
-        transactions,
-      });
+      state.previewTransactions = [...(state.previewTransactions || []), ...transactions];
+      saveState(state);
+      if (reachedCutoff) {
+        finishPreview(state, 'cutoff date reached');
+        return;
+      }
+      if (await continueToNextTransactionsPage(state)) return;
+      finishPreview(state, 'no new rows after scrolling');
       return;
     }
 
-    setStatus(
-      'saving transactions...',
-      `${transactions.length}/${rows.length} parsed; ${(state.orderQueue || []).length} order details queued so far`
-    );
-    const result = await postToApp(state, '/api/amazon-sync/transactions', {
-      transactions,
-      forceReindex: Boolean(state.forceReindex),
-    });
+    setStatus('saving transactions...', `${transactions.length} new rows; ${(state.orderQueue || []).length} order details queued so far`);
+    const neededOrders = [];
+    let result = {};
+    for (let offset = 0; offset < transactions.length; offset += 50) {
+      result = await postToApp(state, '/api/amazon-sync/transactions', {
+        transactions: transactions.slice(offset, offset + 50),
+        forceReindex: Boolean(state.forceReindex),
+      });
+      neededOrders.push(...(Array.isArray(result.needed_orders) ? result.needed_orders : []));
+    }
     state.cutoffDate = result.cutoff_date || state.cutoffDate || null;
-    const neededOrders = Array.isArray(result.needed_orders) ? result.needed_orders : [];
     const lastPageDebug = state.transactionPageDebugHistory?.[state.transactionPageDebugHistory.length - 1];
     if (lastPageDebug) {
       lastPageDebug.apiResult = {
@@ -907,10 +967,12 @@
       return;
     }
 
-    if (continueToNextTransactionsPage(state)) {
+    if (await continueToNextTransactionsPage(state)) {
       return;
     }
 
+    state.nextTransactionsUrl = null;
+    saveState(state);
     if ((state.orderQueue || []).length > 0) {
       setStatus(
         'transaction pages complete; opening order details...',
@@ -937,11 +999,6 @@
         state.stopAfterOrderQueue = null;
         saveState(state);
         finishSync(state, `Complete: ${reason}`, getOrderImportSummary(state));
-        return;
-      }
-
-      if (state.nextTransactionsUrl) {
-        continueToNextTransactionsPage(state);
         return;
       }
 

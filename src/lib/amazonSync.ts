@@ -2,6 +2,7 @@ import 'server-only';
 
 import { createHash, randomBytes } from 'crypto';
 import type { SupabaseClient } from '@supabase/supabase-js';
+export { normalizeOrderId } from './amazonOrderId';
 
 export const AMAZON_SYNC_TOKEN_BYTES = 32;
 export const AMAZON_SYNC_TOKEN_TTL_MINUTES = 30;
@@ -84,15 +85,6 @@ export function normalizeNullableText(value: unknown, maxLength = 1000) {
 
   const normalized = value.replace(/\s+/g, ' ').trim();
   return normalized ? normalized.slice(0, maxLength) : null;
-}
-
-export function normalizeOrderId(value: unknown) {
-  if (typeof value !== 'string') {
-    return null;
-  }
-
-  const match = value.match(/\b\d{3}-\d{7}-\d{7}\b/);
-  return match?.[0] ?? null;
 }
 
 export function parseAmazonMoneyToCents(value: unknown): number | null {

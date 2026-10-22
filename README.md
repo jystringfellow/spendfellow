@@ -136,13 +136,15 @@ Spendfellow includes a Tampermonkey userscript that imports Amazon Payments tran
 2. Sign in to Spendfellow and open Settings.
 3. Use **Install Userscript** to install the version served by your deployment.
 4. Choose a cutoff date and start **Sync Amazon Purchases**.
-5. Keep the Amazon tab open while the userscript scans transactions and order pages. When it finishes, use the status panel to review or copy debug details before closing the tab.
+5. Keep the Amazon tab open while the userscript scrolls through transaction rows and opens order detail pages. When it finishes, use the status panel to review or copy debug details before closing the tab.
 
 For local testing, loopback origins such as `http://localhost:3000` are supported. Non-loopback deployments must use HTTPS.
 
-Use **Preview Payload Only** in Settings when you want to inspect scraped data without writing to Supabase. If the status panel does not appear, confirm Tampermonkey is enabled for `https://www.amazon.com/*`, reinstall the userscript from the current Spendfellow deployment, reload the Amazon page, and inspect the browser console.
+Use **Preview Payload Only** in Settings to scroll through transaction history and inspect the collected rows without writing to Supabase. When scrolling stops or reaches your cutoff date, use **Copy payload** in the status panel to copy the JSON. If the status panel does not appear, confirm Tampermonkey is enabled for `https://www.amazon.com/*`, reinstall the userscript from the current Spendfellow deployment, reload the Amazon page, and inspect the browser console.
 
 The userscript contains no Amazon credentials, cookies, Plaid secrets, or permanent Spendfellow API keys. A sync uses a short-lived token issued by the private deployment. It does not bypass Amazon login, MFA, CAPTCHA, bot detection, or rate limits, and Amazon UI changes can require userscript maintenance.
+
+Whole Foods payment rows with UUID order identifiers are imported as payments. The transactions view does not expose a usable order detail link for these rows, so item details are not imported for them.
 
 ## Development
 
