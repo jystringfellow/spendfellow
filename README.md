@@ -22,8 +22,8 @@ The reusable application lives in this public repository. Each household should 
 
 ## Tech Stack
 
-- **Application**: Next.js App Router, React, and TypeScript
-- **Interface**: Material UI
+- **Application**: Next.js 16 App Router, React 19, and TypeScript
+- **Interface**: Material UI 7
 - **Database and Auth**: PostgreSQL and Supabase
 - **Bank integration**: Plaid
 - **Deployment**: Vercel or another Node.js-compatible host
@@ -54,7 +54,7 @@ spendfellow/
 
 ### Prerequisites
 
-- Node.js 20 or newer
+- Node.js 22 or newer (Node.js 24 LTS recommended)
 - pnpm
 - A Docker-compatible runtime for local database validation
 - A Supabase project
@@ -208,6 +208,13 @@ Development is needs-driven instead of organized around a fixed public roadmap. 
 ## Contributing
 
 This is a personal project, but focused fixes, suggestions, and bug reports are welcome through GitHub Issues and pull requests.
+
+## Framework verification
+
+Run `pnpm test`, `pnpm lint`, and `pnpm type-check` for the unit tests, lint checks, and generated route types.
+Run `pnpm test:smoke` to build and start the production app with placeholder Supabase credentials, then check server rendering in both themes, login query parameters, unauthenticated page redirects, and rejection of unauthenticated requests to dynamic API routes. It uses a temporary port and stops the server afterward. The smoke build replaces `.next`; run `pnpm build` again with your deployment configuration before serving or deploying that output.
+
+CI runs these checks on Node.js 24. The Next.js 16 migration keeps the new React `set-state-in-effect` rule advisory for existing components that reset drafts or initialize browser state; it remains an error for other files. ESLint 9 is retained for compatibility with the plugins shipped by `eslint-config-next`.
 
 ## License
 

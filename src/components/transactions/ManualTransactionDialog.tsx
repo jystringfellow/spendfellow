@@ -27,6 +27,8 @@ interface ManualTransactionDialogProps {
   categories: Pick<Category, 'id' | 'name' | 'is_income'>[];
   transaction?: Transaction;
   compact?: boolean;
+  disabled?: boolean;
+  onSaved?: () => void;
 }
 
 function today() {
@@ -38,6 +40,8 @@ export default function ManualTransactionDialog({
   categories,
   transaction,
   compact = false,
+  disabled = false,
+  onSaved,
 }: ManualTransactionDialogProps) {
   const router = useRouter();
   const [open, setOpen] = useState(false);
@@ -107,6 +111,7 @@ export default function ManualTransactionDialog({
     }
 
     setOpen(false);
+    onSaved?.();
     router.refresh();
   }
 
@@ -124,6 +129,7 @@ export default function ManualTransactionDialog({
     }
 
     setOpen(false);
+    onSaved?.();
     router.refresh();
   }
 
@@ -135,8 +141,9 @@ export default function ManualTransactionDialog({
         variant={transaction ? 'text' : 'contained'}
         startIcon={transaction ? <EditIcon /> : <AddIcon />}
         onClick={() => setOpen(true)}
+        disabled={disabled}
       >
-        {transaction ? 'Edit' : 'Add transaction'}
+        {transaction ? 'Edit manual details' : 'Add transaction'}
       </Button>
       <Dialog open={open} onClose={() => !busy && setOpen(false)} fullWidth maxWidth="sm">
         <DialogTitle>{transaction ? 'Edit manual transaction' : 'Add a manual transaction'}</DialogTitle>

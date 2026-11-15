@@ -86,6 +86,10 @@ function PlaidLinkSession({
     token,
     onSuccess: (publicToken, metadata) => {
       closeSession();
+      if (!publicToken) {
+        onError('Plaid did not return a public token. Start the connection again.');
+        return;
+      }
       onSuccess(publicToken, metadata);
     },
     onExit: (plaidError: PlaidLinkError | null, metadata: PlaidLinkOnExitMetadata) => {
@@ -264,7 +268,7 @@ export default function PlaidLinkButton() {
         <DialogContent>
           <Stack spacing={1.5} sx={{ pt: 1 }}>
             <Typography color="text.secondary">
-              Choose whether to connect a test institution or a real financial institution.
+              Connect your bank securely with Plaid, or try a test connection with sample accounts.
             </Typography>
             <Button
               variant="outlined"
@@ -272,7 +276,7 @@ export default function PlaidLinkButton() {
               onClick={() => startLinkForEnvironment('sandbox')}
               sx={{ justifyContent: 'flex-start', py: 1.25 }}
             >
-              Sandbox
+              Try sample accounts
             </Button>
             <Button
               variant="contained"
@@ -280,7 +284,7 @@ export default function PlaidLinkButton() {
               onClick={() => startLinkForEnvironment('production')}
               sx={{ justifyContent: 'flex-start', py: 1.25 }}
             >
-              Production
+              Connect my bank
             </Button>
           </Stack>
         </DialogContent>

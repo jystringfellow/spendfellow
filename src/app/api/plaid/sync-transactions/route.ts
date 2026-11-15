@@ -6,6 +6,7 @@ import { isSpendingAccountType } from '@/lib/accountTypes';
 import { getCurrentHousehold } from '@/lib/households';
 import { dollarsToCents } from '@/lib/money';
 import { fetchTransactions, resolvePlaidEnvironment, PlaidApiError } from '@/lib/plaid';
+import { getSelectedAccountsSyncStartDate } from '@/lib/plaidSyncDates';
 import { logPlaidSyncRun } from '@/lib/plaidSyncRuns';
 import {
   getPendingAwareStartDate,
@@ -20,6 +21,7 @@ interface AccountLookup {
   plaid_item_id: string | null;
   plaid_environment: Account['plaid_environment'];
   type: string;
+  is_active: boolean;
 }
 
 interface ExistingTransactionEdits {
@@ -59,28 +61,8 @@ function toIsoDate(date: Date): string {
   return date.toISOString().slice(0, 10);
 }
 
-function addDays(date: Date, days: number): Date {
-  const next = new Date(date);
-  next.setDate(next.getDate() + days);
-  return next;
-}
-
 function isIsoDate(value: string | null | undefined): value is string {
   return Boolean(value && /^\d{4}-\d{2}-\d{2}$/.test(value));
-}
-
-function getSyncStartDate(lastSyncAt: string | null, payload: SyncPayload): string {
-  if (payload.mode === 'custom' && isIsoDate(payload.start_date)) {
-    return payload.start_date;
-  }
-
-  if (payload.mode === 'last_30_days' || !lastSyncAt) {
-    return toIsoDate(addDays(new Date(), -30));
-  }
-
-  // Re-sync a small overlap because pending transactions and late postings can
-  // change after the first import.
-  return toIsoDate(addDays(new Date(lastSyncAt), -3));
 }
 
 function getAccountLookupKey(plaidEnvironment: Account['plaid_environment'], plaidAccountId: string): string {
@@ -96,11 +78,15 @@ export async function POST(request: NextRequest) {
     ? payload.item_ids.filter((itemId): itemId is string => typeof itemId === 'string' && itemId.length > 0)
     : [];
 
+  if ((Array.isArray(payload.account_ids) && requestedAccountIds.length === 0) || (Array.isArray(payload.item_ids) && requestedItemIds.length === 0)) {
+    return NextResponse.json({ error: 'Select at least one account or institution to sync.' }, { status: 400 });
+  }
+
   if (payload.mode === 'custom' && !isIsoDate(payload.start_date)) {
     return NextResponse.json({ error: 'start_date must be a date in YYYY-MM-DD format.' }, { status: 400 });
   }
 
-  const supabase = createServerSupabaseClient();
+  const supabase = await createServerSupabaseClient();
   const {
     data: { user },
     error: userError,
@@ -132,7 +118,7 @@ export async function POST(request: NextRequest) {
 
   const { data: accountRows, error: accountsError } = await serviceSupabase
     .from('accounts')
-    .select('id, plaid_account_id, plaid_item_id, plaid_environment, type')
+    .select('id, plaid_account_id, plaid_item_id, plaid_environment, type, is_active')
     .eq('household_id', household.id);
 
   if (accountsError) {
@@ -156,7 +142,7 @@ export async function POST(request: NextRequest) {
       return false;
     }
 
-    return isSpendingAccountType(account.type);
+    return account.is_active && Boolean(account.plaid_account_id) && isSpendingAccountType(account.type);
   });
   const accountByPlaidId = new Map(
     eligibleAccounts
@@ -169,7 +155,7 @@ export async function POST(request: NextRequest) {
       return false;
     }
 
-    if (selectedAccountIdSet && !eligibleAccounts.some((account) => account.plaid_item_id === item.plaid_item_id)) {
+    if (!eligibleAccounts.some((account) => account.plaid_item_id === item.plaid_item_id && account.plaid_environment === item.plaid_environment)) {
       return false;
     }
 
@@ -194,10 +180,10 @@ export async function POST(request: NextRequest) {
     for (const item of scopedPlaidItems) {
       const plaidEnvironment = resolvePlaidEnvironment(item.plaid_environment, item.plaid_access_token);
       const itemAccounts = allAccounts.filter(
-        (account) => (account.plaid_environment === plaidEnvironment || account.plaid_environment === null) && account.plaid_account_id
+        (account) => account.plaid_item_id === item.plaid_item_id && (account.plaid_environment === plaidEnvironment || account.plaid_environment === null) && account.plaid_account_id
       );
       const eligibleItemAccountIds = eligibleAccounts
-        .filter((account) => account.plaid_item_id === item.plaid_item_id)
+        .filter((account) => account.plaid_item_id === item.plaid_item_id && account.plaid_environment === item.plaid_environment)
         .map((account) => account.id);
       const { data: existingPendingRows, error: existingPendingError } =
         eligibleItemAccountIds.length > 0
@@ -215,8 +201,20 @@ export async function POST(request: NextRequest) {
       }
 
       const pendingTransactions = (existingPendingRows ?? []) as ExistingPendingTransaction[];
+      const accountSyncRuns = await Promise.all(eligibleItemAccountIds.map((accountId) => serviceSupabase
+        .from('plaid_sync_runs')
+        .select('finished_at')
+        .eq('household_id', household.id)
+        .eq('account_id', accountId)
+        .eq('sync_type', 'transactions')
+        .eq('status', 'success')
+        .order('finished_at', { ascending: false })
+        .limit(1)
+        .maybeSingle()));
+      const syncHistoryError = accountSyncRuns.find((run) => run.error)?.error;
+      if (syncHistoryError) return NextResponse.json({ error: syncHistoryError.message }, { status: 500 });
       const startDate = getPendingAwareStartDate(
-        getSyncStartDate(item.last_sync_at, payload),
+        getSelectedAccountsSyncStartDate(accountSyncRuns.map((run) => run.data?.finished_at ?? null), payload),
         pendingTransactions.map((transaction) => transaction.date)
       );
       const endDate = toIsoDate(new Date());
@@ -379,7 +377,7 @@ export async function POST(request: NextRequest) {
       });
       await Promise.all(
         eligibleAccounts
-          .filter((account) => account.plaid_item_id === item.plaid_item_id)
+          .filter((account) => account.plaid_item_id === item.plaid_item_id && account.plaid_environment === item.plaid_environment)
           .map((account) =>
             logPlaidSyncRun(serviceSupabase, {
               householdId: household.id,

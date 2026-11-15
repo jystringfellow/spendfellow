@@ -17,14 +17,14 @@ export function createAppTheme(mode: AppColorMode) {
       contrastText: isDark ? '#090A14' : '#FFFFFF',
     },
     secondary: {
-      main: isDark ? '#8B3DFF' : '#6F3AD7',
+      main: isDark ? '#B28AFF' : '#6F3AD7',
       light: isDark ? '#B05CFF' : '#8B5CE8',
       dark: isDark ? '#5B22BF' : '#4C259D',
       contrastText: '#FFFFFF',
     },
     background: {
-      default: isDark ? '#090A14' : '#F6F8F3',
-      paper: isDark ? '#171A27' : '#FFFFFF',
+      default: isDark ? '#101113' : '#F7F7F5',
+      paper: isDark ? '#191A1E' : '#FFFFFF',
     },
     text: {
       primary: isDark ? '#F7F8FC' : '#172017',
@@ -45,9 +45,14 @@ export function createAppTheme(mode: AppColorMode) {
     info: {
       main: isDark ? '#4DA9FF' : '#226FB3',
     },
-    divider: isDark ? '#2B3145' : '#D9DFD3',
+    divider: isDark ? '#2D2E35' : '#E2E3DF',
   },
   typography: {
+    h1: { fontWeight: 750, letterSpacing: '-0.04em' },
+    h2: { fontWeight: 750, letterSpacing: '-0.035em' },
+    h4: { fontWeight: 700, letterSpacing: '-0.03em' },
+    h5: { fontWeight: 700, letterSpacing: '-0.02em' },
+    h6: { fontWeight: 650, letterSpacing: '-0.015em' },
     fontFamily: [
       '-apple-system',
       'BlinkMacSystemFont',
@@ -62,10 +67,15 @@ export function createAppTheme(mode: AppColorMode) {
     MuiCssBaseline: {
       styleOverrides: {
         body: {
-          background: isDark
-            ? 'radial-gradient(circle at top left, rgba(109, 255, 46, 0.08), transparent 34rem), radial-gradient(circle at top right, rgba(176, 92, 255, 0.1), transparent 32rem), #090A14'
-            : 'radial-gradient(circle at top left, rgba(35, 138, 45, 0.08), transparent 34rem), radial-gradient(circle at top right, rgba(111, 58, 215, 0.08), transparent 32rem), #F6F8F3',
+          backgroundColor: isDark ? '#101113' : '#F7F7F5',
           color: isDark ? '#F7F8FC' : '#172017',
+        },
+        ':where(a, button, input, select, textarea):focus-visible': {
+          outline: `2px solid ${isDark ? '#6DFF2E' : '#238A2D'}`,
+          outlineOffset: 4,
+        },
+        '::selection': {
+          backgroundColor: isDark ? '#6139A8' : '#E8DCF9',
         },
         'input[type="date"]': {
           colorScheme: mode,
@@ -81,16 +91,13 @@ export function createAppTheme(mode: AppColorMode) {
           textTransform: 'none',
           borderRadius: 12,
           fontWeight: 650,
+          minHeight: 40,
         },
         containedPrimary: {
-          background: isDark
-            ? 'linear-gradient(90deg, #6DFF2E 0%, #2DEB74 42%, #8B3DFF 100%)'
-            : 'linear-gradient(90deg, #238A2D 0%, #35B343 48%, #6F3AD7 100%)',
-          color: isDark ? '#090A14' : '#FFFFFF',
+          backgroundColor: isDark ? '#6DFF2E' : '#238A2D',
+          color: isDark ? '#101113' : '#FFFFFF',
           '&:hover': {
-            background: isDark
-              ? 'linear-gradient(90deg, #8DFF62 0%, #2DEB74 38%, #B05CFF 100%)'
-              : 'linear-gradient(90deg, #17621F 0%, #2E9F4A 48%, #4C259D 100%)',
+            backgroundColor: isDark ? '#8DFF62' : '#17621F',
           },
         },
       },
@@ -100,8 +107,8 @@ export function createAppTheme(mode: AppColorMode) {
         root: {
           backgroundImage: 'none',
           borderRadius: 12,
-          border: `1px solid ${isDark ? '#2B3145' : '#D9DFD3'}`,
-          boxShadow: isDark ? '0 12px 40px rgba(0, 0, 0, 0.24)' : '0 10px 32px rgba(23, 32, 23, 0.08)',
+          border: `1px solid ${isDark ? '#2D2E35' : '#E2E3DF'}`,
+          boxShadow: 'none',
         },
       },
     },
@@ -117,8 +124,8 @@ export function createAppTheme(mode: AppColorMode) {
         root: {
           backgroundColor: isDark ? '#090A14' : '#FFFFFF',
           color: isDark ? '#F7F8FC' : '#172017',
-          borderBottom: `1px solid ${isDark ? '#2B3145' : '#D9DFD3'}`,
-          boxShadow: isDark ? '0 10px 34px rgba(0, 0, 0, 0.28)' : '0 8px 28px rgba(23, 32, 23, 0.08)',
+          borderBottom: `1px solid ${isDark ? '#2D2E35' : '#E2E3DF'}`,
+          boxShadow: 'none',
         },
       },
     },
@@ -128,14 +135,15 @@ export function createAppTheme(mode: AppColorMode) {
           borderRadius: 12,
         },
         notchedOutline: {
-          borderColor: isDark ? '#2B3145' : '#D9DFD3',
+          borderColor: isDark ? '#2D2E35' : '#E2E3DF',
         },
       },
     },
     MuiTableCell: {
       styleOverrides: {
         root: {
-          borderBottomColor: isDark ? '#2B3145' : '#D9DFD3',
+          borderBottomColor: isDark ? '#2D2E35' : '#E2E3DF',
+          fontVariantNumeric: 'tabular-nums',
         },
         head: {
           color: isDark ? '#8D94AA' : '#687266',

@@ -80,6 +80,7 @@ export default function TagAutocomplete({ tags, selectedTagIds, newTagNames, onC
       renderInput={(params) => (
         <TextField
           {...params}
+          label="Tags"
           placeholder={selectedTags.length === 0 ? 'Tags' : undefined}
           onKeyDown={(event) => {
             if (event.key !== 'Tab') {

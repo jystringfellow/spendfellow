@@ -5,7 +5,7 @@ import { createServerSupabaseClient } from '@/lib/supabaseServer';
 import { createServiceSupabaseClient } from '@/lib/supabaseService';
 
 interface RouteParams {
-  params: { transactionId: string };
+  params: Promise<{ transactionId: string }>;
 }
 
 interface UpdateManualTransactionPayload {
@@ -18,13 +18,14 @@ interface UpdateManualTransactionPayload {
 }
 
 async function getContext() {
-  const supabase = createServerSupabaseClient();
+  const supabase = await createServerSupabaseClient();
   const { data: { user }, error } = await supabase.auth.getUser();
   const household = user && !error ? await getCurrentHousehold(supabase) : null;
   return { user, household };
 }
 
-export async function PATCH(request: NextRequest, { params }: RouteParams) {
+export async function PATCH(request: NextRequest, { params: paramsPromise }: RouteParams) {
+  const params = await paramsPromise;
   const payload = (await request.json().catch(() => ({}))) as UpdateManualTransactionPayload;
   const { user, household } = await getContext();
 
@@ -113,7 +114,8 @@ export async function PATCH(request: NextRequest, { params }: RouteParams) {
   return NextResponse.json({ transaction });
 }
 
-export async function DELETE(_request: Request, { params }: RouteParams) {
+export async function DELETE(_request: Request, { params: paramsPromise }: RouteParams) {
+  const params = await paramsPromise;
   const { user, household } = await getContext();
   if (!user) return NextResponse.json({ error: 'You must be signed in to delete transactions.' }, { status: 401 });
   if (!household) return NextResponse.json({ error: 'Create a household before deleting transactions.' }, { status: 400 });

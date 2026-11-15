@@ -4,7 +4,6 @@ const nextConfig = {
   // in development, which can embed Plaid Link twice and produce unstable local
   // Link behavior.
   reactStrictMode: false,
-  swcMinify: true,
 }
 
 module.exports = nextConfig

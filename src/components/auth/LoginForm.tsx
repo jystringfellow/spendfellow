@@ -88,7 +88,9 @@ export default function LoginForm({ supabaseConfigured, initialError = null }: L
 
         {!supabaseConfigured && (
           <Alert severity="warning">
-            Supabase environment variables are not configured. Add them to `.env.local` before signing in.
+            To load accounts and budgets, add a valid NEXT_PUBLIC_SUPABASE_URL and
+            NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY (or NEXT_PUBLIC_SUPABASE_ANON_KEY) to .env.local,
+            then restart the app.
           </Alert>
         )}
 

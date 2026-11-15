@@ -33,17 +33,20 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 24
           cache: pnpm
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
+      - name: Lint
+        run: pnpm lint
+
       - name: Test
         run: pnpm test
 
-      - name: Build
-        run: pnpm build
+      - name: Production build and smoke tests
+        run: pnpm test:smoke
 
       - name: Type-check
         run: pnpm type-check

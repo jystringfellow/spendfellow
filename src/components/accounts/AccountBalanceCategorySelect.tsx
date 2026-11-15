@@ -30,22 +30,25 @@ export default function AccountBalanceCategorySelect({
     setIsSaving(true);
     setError(null);
 
-    const response = await fetch(`/api/accounts/${accountId}`, {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ balance_category: nextValue === 'auto' ? null : nextValue }),
-    });
-    const data = (await response.json().catch(() => ({}))) as { error?: string };
-
-    setIsSaving(false);
-
-    if (!response.ok) {
-      setError(data.error ?? 'Unable to update balance category.');
+    try {
+      const response = await fetch(`/api/accounts/${accountId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ balance_category: nextValue === 'auto' ? null : nextValue }),
+      });
+      const data = (await response.json().catch(() => ({}))) as { error?: string };
+      if (!response.ok) {
+        setError(data.error ?? 'Unable to update balance category.');
+        setDraftValue(value ?? 'auto');
+        return;
+      }
+      router.refresh();
+    } catch {
+      setError('Unable to reach the server. Try choosing the balance category again.');
       setDraftValue(value ?? 'auto');
-      return;
+    } finally {
+      setIsSaving(false);
     }
-
-    router.refresh();
   }
 
   return (
@@ -53,7 +56,8 @@ export default function AccountBalanceCategorySelect({
       <TextField
         select
         size="small"
-        label="Budget balance"
+        label="Balance category"
+        helperText={isSaving ? 'Saving…' : 'Saves automatically'}
         value={draftValue}
         onChange={(event) => void saveBalanceCategory(event.target.value as AccountBalanceCategory | 'auto')}
         disabled={isSaving}

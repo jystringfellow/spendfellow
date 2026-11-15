@@ -32,20 +32,11 @@ export default function AppThemeProvider({
   initialMode: AppColorMode;
 }) {
   const [mode, setMode] = useState<AppColorMode>(initialMode);
-  const [isHydrated, setIsHydrated] = useState(false);
 
   useEffect(() => {
-    setIsHydrated(true);
-  }, []);
-
-  useEffect(() => {
-    if (!isHydrated) {
-      return;
-    }
-
     window.localStorage.setItem(STORAGE_KEY, mode);
     document.cookie = `${COOKIE_KEY}=${mode}; path=/; max-age=31536000; samesite=lax`;
-  }, [isHydrated, mode]);
+  }, [mode]);
 
   const theme = useMemo(() => createAppTheme(mode), [mode]);
   const value = useMemo(

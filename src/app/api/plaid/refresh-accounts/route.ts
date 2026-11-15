@@ -57,7 +57,7 @@ export async function POST(request: NextRequest) {
     ? payload.account_ids.filter((accountId): accountId is string => typeof accountId === 'string' && accountId.length > 0)
     : [];
 
-  const supabase = createServerSupabaseClient();
+  const supabase = await createServerSupabaseClient();
   const {
     data: { user },
     error: userError,

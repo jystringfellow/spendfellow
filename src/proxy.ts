@@ -1,22 +1,18 @@
 import { createServerClient } from '@supabase/ssr';
 import { NextResponse, type NextRequest } from 'next/server';
-import { getSupabasePublicKey, getSupabaseUrl, hasSupabaseEnv } from '@/lib/supabaseEnv';
+import { getSupabasePublicKey, getSupabaseUrl } from '@/lib/supabaseEnv';
 
-export async function middleware(request: NextRequest) {
-  if (!hasSupabaseEnv()) {
-    return NextResponse.next();
-  }
-
-  let response = NextResponse.next({
-    request,
-  });
-
+export async function proxy(request: NextRequest) {
   const supabaseUrl = getSupabaseUrl();
   const supabasePublicKey = getSupabasePublicKey();
 
   if (!supabaseUrl || !supabasePublicKey) {
-    return response;
+    const loginUrl = new URL('/login', request.url);
+    loginUrl.searchParams.set('next', request.nextUrl.pathname + request.nextUrl.search);
+    return NextResponse.redirect(loginUrl);
   }
+
+  let response = NextResponse.next({ request });
 
   const supabase = createServerClient(supabaseUrl, supabasePublicKey, {
     cookies: {
@@ -48,5 +44,13 @@ export async function middleware(request: NextRequest) {
 }
 
 export const config = {
-  matcher: ['/accounts/:path*', '/budgets/:path*', '/constants/:path*', '/reports/:path*', '/transactions/:path*'],
+  matcher: [
+    '/accounts/:path*',
+    '/budgets/:path*',
+    '/constants/:path*',
+    '/reports/:path*',
+    '/transactions/:path*',
+    '/settings/:path*',
+    '/auth/set-password/:path*',
+  ],
 };

@@ -30,7 +30,7 @@ const MANUAL_KINDS = new Set<CategoryBalanceAdjustmentKind>([
 ]);
 
 async function getAuthenticatedHousehold() {
-  const supabase = createServerSupabaseClient();
+  const supabase = await createServerSupabaseClient();
   const {
     data: { user },
     error: userError,

@@ -1,6 +1,7 @@
+import './globals.css';
 import type { Metadata } from 'next';
 import { cookies } from 'next/headers';
-import { AppRouterCacheProvider } from '@mui/material-nextjs/v14-appRouter';
+import { AppRouterCacheProvider } from '@mui/material-nextjs/v16-appRouter';
 import { Box } from '@mui/material';
 import type { AppColorMode } from '@/app/theme';
 import AppThemeProvider from '@/components/layout/AppThemeProvider';
@@ -15,12 +16,12 @@ export const metadata: Metadata = {
   },
 };
 
-export default function RootLayout({
+export default async function RootLayout({
   children,
 }: {
   children: React.ReactNode;
 }) {
-  const storedMode = cookies().get('spendfellow-color-mode')?.value;
+  const storedMode = (await cookies()).get('spendfellow-color-mode')?.value;
   const initialMode: AppColorMode = storedMode === 'light' || storedMode === 'dark' ? storedMode : 'dark';
 
   return (

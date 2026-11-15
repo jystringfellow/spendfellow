@@ -1,3 +1,5 @@
+import AccountsWorkspace, { OrderedAccountRows, OrderedInstitutions } from '@/components/accounts/AccountsWorkspace';
+import { isSpendingAccountType } from '@/lib/accountTypes';
 import { redirect } from 'next/navigation';
 import {
   Box,
@@ -8,7 +10,6 @@ import {
   Paper,
   Stack,
   Table,
-  TableBody,
   TableCell,
   TableContainer,
   TableHead,
@@ -16,7 +17,7 @@ import {
   Tooltip,
   Typography,
 } from '@mui/material';
-import Link from 'next/link';
+import Link from '@/components/common/Link';
 import AccountBalanceCategorySelect from '@/components/accounts/AccountBalanceCategorySelect';
 import AccountNameEditor from '@/components/accounts/AccountNameEditor';
 import ManualAccountDialog from '@/components/accounts/ManualAccountDialog';
@@ -180,7 +181,7 @@ function getAccountWarnings(account: Account): string[] {
 }
 
 export default async function AccountsPage() {
-  const supabase = createServerSupabaseClient();
+  const supabase = await createServerSupabaseClient();
   const {
     data: { user },
   } = await supabase.auth.getUser();
@@ -229,21 +230,39 @@ export default async function AccountsPage() {
   const inactiveItems = items.filter((item) => item.status !== 'active');
 
   return (
-    <Container maxWidth="lg">
+    <Container maxWidth="lg" sx={{
+      '& .MuiTable-root': { minWidth: { xs: 0, sm: 640 } },
+      '& .MuiTableHead-root': { display: { xs: 'none', sm: 'table-header-group' } },
+      '& .MuiTableBody-root .MuiTableRow-root': {
+        display: { xs: 'grid', sm: 'table-row' },
+        gridTemplateColumns: 'minmax(0, 1fr)',
+        borderBottom: { xs: '1px solid', sm: 'none' }, borderColor: 'divider',
+        p: { xs: 1, sm: 0 },
+      },
+      '& .MuiTableBody-root .MuiTableCell-root': {
+        display: { xs: 'block', sm: 'table-cell' },
+        borderBottom: { xs: 0, sm: '1px solid' }, borderColor: 'divider',
+        textAlign: { xs: 'left', sm: 'inherit' },
+      },
+      '& .MuiTableBody-root .MuiTableCell-root:nth-of-type(2)': {
+        textAlign: { xs: 'left', sm: 'right' }, fontVariantNumeric: 'tabular-nums',
+        '&::before': { content: { xs: '\"Current balance: \"', sm: 'none' }, color: 'text.secondary' },
+      },
+    }}>
       <Box sx={{ my: 4 }}>
-        <Stack direction={{ xs: 'column', sm: 'row' }} justifyContent="space-between" spacing={2} sx={{ mb: 3 }}>
+        <Stack direction={{ xs: 'column', md: 'row' }} justifyContent="space-between" spacing={2} sx={{ mb: 3 }}>
           <Box>
             <Typography variant="h4" component="h1" gutterBottom>
               Accounts
             </Typography>
             <Typography variant="body1" color="text.secondary">
-              Connect financial institutions and manage balances imported from Plaid or tracked manually.
+              Your balances and bank connections, together in one place.
             </Typography>
           </Box>
           {household ? (
             <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1.5} alignItems={{ xs: 'stretch', sm: 'flex-start' }}>
               <ManualAccountDialog />
-              <RefreshAccountsButton />
+              <RefreshAccountsButton label="Refresh all balances" />
               <PlaidLinkButton />
             </Stack>
           ) : null}
@@ -257,16 +276,27 @@ export default async function AccountsPage() {
                 Plaid accounts are shared at the household level, so initialize your household before connecting an
                 institution.
               </Typography>
-              <Button component={Link} href="/settings" variant="contained">
+              <Button component={Link} href="/settings?section=household" variant="contained">
                 Go to settings
               </Button>
             </Stack>
           </Paper>
         ) : (
+          <AccountsWorkspace storageKey={`spendfellow:accounts:${user.id}:${household.id}`}
+            institutions={activeItems.map((item) => ({ id: item.id, name: getInstitutionName(item) }))}
+            accounts={accounts.map((account) => {
+              const item = activeItems.find((item) => item.plaid_item_id === account.plaid_item_id && item.plaid_environment === account.plaid_environment);
+              return { id: account.id, name: account.name, institutionId: item?.id ?? null,
+                syncable: Boolean(item && account.is_active && account.source !== 'manual' && account.plaid_account_id && isSpendingAccountType(account.type)) };
+            })}>
           <Stack spacing={3}>
+            <Stack direction="row" spacing={1} useFlexGap flexWrap="wrap">
+              <Chip size="small" variant="outlined" label={`${accounts.filter((account) => account.is_active).length} active accounts`} />
+              <Chip size="small" variant="outlined" color="secondary" label={`${activeItems.length} connected institutions`} />
+            </Stack>
             <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', sm: 'repeat(2, 1fr)', lg: 'repeat(4, 1fr)' }, gap: 2 }}>
               {balanceCategorySummaries.map((summary) => (
-                <Paper key={summary.value} sx={{ p: 2 }}>
+                <Paper key={summary.value} sx={{ p: 2.5, borderTop: '3px solid', borderTopColor: summary.value === 'ccDebt' ? 'secondary.main' : 'primary.main' }}>
                   <Stack spacing={0.75}>
                     <Typography variant="body2" color="text.secondary">
                       {summary.label}
@@ -274,6 +304,7 @@ export default async function AccountsPage() {
                     <Typography variant="h5" sx={{ fontWeight: 700 }}>
                       {formatCurrency(summary.totalCents)}
                     </Typography>
+                    <Typography variant="caption" color="text.secondary">{summary.accounts.length} {summary.accounts.length === 1 ? 'account' : 'accounts'}</Typography>
                   </Stack>
                 </Paper>
               ))}
@@ -290,17 +321,17 @@ export default async function AccountsPage() {
                   </Box>
                   <Divider />
                   <TableContainer>
-                    <Table size="small" sx={{ minWidth: 680 }}>
+                    <Table size="small">
                       <TableHead>
                         <TableRow>
                           <TableCell>Account</TableCell>
                           <TableCell align="right">Balance</TableCell>
-                          <TableCell>Budget Balance</TableCell>
+                          <TableCell>Balance category</TableCell>
                         </TableRow>
                       </TableHead>
-                      <TableBody>
+                      <OrderedAccountRows>
                         {manualAccounts.map((account) => (
-                          <TableRow key={account.id}>
+                          <TableRow key={account.id} data-account-id={account.id}>
                             <TableCell>
                               <Stack spacing={0.5}>
                                 <AccountNameEditor accountId={account.id} name={account.name} officialName={null} />
@@ -319,7 +350,7 @@ export default async function AccountsPage() {
                             </TableCell>
                           </TableRow>
                         ))}
-                      </TableBody>
+                      </OrderedAccountRows>
                     </Table>
                   </TableContainer>
                 </Paper>
@@ -328,12 +359,13 @@ export default async function AccountsPage() {
               <Box>
                 <Typography variant="h6">Linked institutions</Typography>
                 <Typography variant="body2" color="text.secondary">
-                  Manage connections by institution, then choose how each account rolls into the budget sheet.
+                  Expand an institution to rename accounts or choose where their balances appear. Balance categories save automatically.
                 </Typography>
               </Box>
 
               {activeItems.length > 0 ? (
                 <LinkedInstitutionCollapseProvider>
+                  <OrderedInstitutions>
                   {activeItems.map((item) => {
                     const institutionName = getInstitutionName(item);
                     const itemAccounts = getAccountsForItem(accounts, item);
@@ -344,8 +376,12 @@ export default async function AccountsPage() {
                     return (
                       <LinkedInstitutionCard
                         key={item.id}
+                        orderId={item.id}
                         title={institutionName}
                         info={getInstitutionInfo(item, latestBalanceRun, latestTransactionRun)}
+                        summary={`${itemAccounts.length} ${itemAccounts.length === 1 ? 'account' : 'accounts'} · ${item.plaid_environment === 'sandbox' ? 'Test connection' : 'Bank connection'}`}
+                        status={item.status === 'active' ? 'Connected' : item.status === 'error' ? 'Needs attention' : 'Disconnected'}
+                        lastSynced={formatSyncedAt(item.last_sync_at)}
                         actions={
                           <>
                             <RefreshAccountsButton
@@ -355,7 +391,8 @@ export default async function AccountsPage() {
                               size="small"
                             />
                             <SyncTransactionsButton
-                              itemIds={[item.id]}
+                              disabled={!itemAccounts.some((account) => account.is_active && account.plaid_account_id && isSpendingAccountType(account.type))}
+                              accountIds={itemAccounts.filter((account) => account.is_active && account.plaid_account_id && isSpendingAccountType(account.type)).map((account) => account.id)}
                               label="Sync transactions"
                               size="small"
                               variant="outlined"
@@ -366,21 +403,21 @@ export default async function AccountsPage() {
                       >
                         {itemAccounts.length > 0 ? (
                           <TableContainer>
-                            <Table size="small" sx={{ minWidth: 640 }}>
+                            <Table size="small">
                               <TableHead>
                                 <TableRow>
                                   <TableCell>Account</TableCell>
                                   <TableCell align="right">Balance</TableCell>
-                                  <TableCell>Budget Balance</TableCell>
+                                  <TableCell>Balance category</TableCell>
                                 </TableRow>
                               </TableHead>
-                              <TableBody>
+                              <OrderedAccountRows>
                                 {itemAccounts.map((account) => {
                                   const warnings = getAccountWarnings(account);
                                   const category = getAccountBalanceCategory(account);
 
                                   return (
-                                    <TableRow key={account.id}>
+                                    <TableRow key={account.id} data-account-id={account.id}>
                                       <TableCell>
                                         <Stack spacing={0.75}>
                                           <AccountNameEditor
@@ -394,7 +431,7 @@ export default async function AccountsPage() {
                                             </Tooltip>
                                             {warnings.map((warning) => (
                                               <Tooltip key={warning} title={warning}>
-                                                <Chip size="small" color="warning" variant="outlined" label="Check" />
+                                                <Chip size="small" color="warning" variant="outlined" label={warning} />
                                               </Tooltip>
                                             ))}
                                           </Stack>
@@ -420,7 +457,7 @@ export default async function AccountsPage() {
                                   </TableRow>
                                 );
                               })}
-                              </TableBody>
+                              </OrderedAccountRows>
                             </Table>
                           </TableContainer>
                         ) : (
@@ -433,6 +470,7 @@ export default async function AccountsPage() {
                       </LinkedInstitutionCard>
                     );
                   })}
+                  </OrderedInstitutions>
                 </LinkedInstitutionCollapseProvider>
               ) : items.length > 0 ? (
                 <Paper sx={{ p: 3 }}>
@@ -440,7 +478,10 @@ export default async function AccountsPage() {
                 </Paper>
               ) : (
                 <Paper sx={{ p: 3 }}>
-                  <Typography color="text.secondary">No institutions connected yet.</Typography>
+                  <Stack spacing={1}>
+                    <Typography variant="h6">Connect your first institution</Typography>
+                    <Typography color="text.secondary">Use Connect account above to bring in balances and transactions. Prefer to track cash yourself? Add a manual account.</Typography>
+                  </Stack>
                 </Paper>
               )}
 
@@ -461,26 +502,29 @@ export default async function AccountsPage() {
                           key={item.id}
                           title={institutionName}
                           info={getInstitutionInfo(item, latestBalanceRun, latestTransactionRun)}
+                        summary={`${itemAccounts.length} ${itemAccounts.length === 1 ? 'account' : 'accounts'} · ${item.plaid_environment === 'sandbox' ? 'Test connection' : 'Bank connection'}`}
+                        status={item.status === 'active' ? 'Connected' : item.status === 'error' ? 'Needs attention' : 'Disconnected'}
+                        lastSynced={formatSyncedAt(item.last_sync_at)}
                           actions={<PlaidItemActions itemId={item.id} institutionName={institutionName} />}
                           defaultOpen={false}
                         >
                           {itemAccounts.length > 0 ? (
                             <TableContainer>
-                              <Table size="small" sx={{ minWidth: 640 }}>
+                              <Table size="small">
                                 <TableHead>
                                   <TableRow>
                                     <TableCell>Account</TableCell>
                                     <TableCell align="right">Balance</TableCell>
-                                    <TableCell>Budget Balance</TableCell>
+                                    <TableCell>Balance category</TableCell>
                                   </TableRow>
                                 </TableHead>
-                                <TableBody>
+                                <OrderedAccountRows>
                                   {itemAccounts.map((account) => {
                                     const warnings = getAccountWarnings(account);
                                     const category = getAccountBalanceCategory(account);
 
                                     return (
-                                      <TableRow key={account.id}>
+                                      <TableRow key={account.id} data-account-id={account.id}>
                                         <TableCell>
                                           <Stack spacing={0.75}>
                                             <AccountNameEditor
@@ -494,7 +538,7 @@ export default async function AccountsPage() {
                                               </Tooltip>
                                               {warnings.map((warning) => (
                                                 <Tooltip key={warning} title={warning}>
-                                                  <Chip size="small" color="warning" variant="outlined" label="Check" />
+                                                  <Chip size="small" color="warning" variant="outlined" label={warning} />
                                                 </Tooltip>
                                               ))}
                                             </Stack>
@@ -520,7 +564,7 @@ export default async function AccountsPage() {
                                       </TableRow>
                                     );
                                   })}
-                                </TableBody>
+                                </OrderedAccountRows>
                               </Table>
                             </TableContainer>
                           ) : (
@@ -544,17 +588,17 @@ export default async function AccountsPage() {
                         </Box>
                         <Divider />
                         <TableContainer>
-                          <Table size="small" sx={{ minWidth: 680 }}>
+                          <Table size="small">
                             <TableHead>
                               <TableRow>
                                 <TableCell>Account</TableCell>
                                 <TableCell align="right">Balance</TableCell>
-                                <TableCell>Budget Balance</TableCell>
+                                <TableCell>Balance category</TableCell>
                               </TableRow>
                             </TableHead>
-                            <TableBody>
+                            <OrderedAccountRows>
                               {otherAccounts.map((account) => (
-                                <TableRow key={account.id}>
+                                <TableRow key={account.id} data-account-id={account.id}>
                                   <TableCell>
                                     <AccountNameEditor accountId={account.id} name={account.name} officialName={account.official_name} />
                                   </TableCell>
@@ -572,7 +616,7 @@ export default async function AccountsPage() {
                                   </TableCell>
                                 </TableRow>
                               ))}
-                            </TableBody>
+                            </OrderedAccountRows>
                           </Table>
                         </TableContainer>
                       </Paper>
@@ -582,6 +626,7 @@ export default async function AccountsPage() {
               ) : null}
             </Stack>
           </Stack>
+          </AccountsWorkspace>
         )}
       </Box>
     </Container>
