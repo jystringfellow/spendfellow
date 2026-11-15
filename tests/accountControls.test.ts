@@ -69,7 +69,8 @@ test('balance category recovers from network failure without leaving the control
 });
 
 test('institution title toggles account details and exposes its expanded state', async () => {
-  const user = render(createElement(LinkedInstitutionCard, { title: 'My bank', info: 'Sync details', status: 'Connected', summary: '2 accounts', children: createElement('p', null, 'Account details') }));
+  const cardProps = { title: 'My bank', info: 'Sync details', status: 'Connected', summary: '2 accounts', children: createElement('p', null, 'Account details') };
+  const user = render(createElement(LinkedInstitutionCard, cardProps));
   const toggle = testing.screen.getByRole('button', { name: 'My bank' });
   assert.equal(toggle.getAttribute('aria-expanded'), 'true');
   assert.ok(testing.screen.getByText('Connected'));

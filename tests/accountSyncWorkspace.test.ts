@@ -25,11 +25,11 @@ const institutions = [{ id: 'bank', name: 'Bank' }, { id: 'credit', name: 'Credi
 const storageKey = 'test-account-preferences';
 
 before(async () => {
-  console.log('dom'); installDom();
+  installDom();
   testing = await import('@testing-library/react');
   userEvent = (await import('@testing-library/user-event')).default;
   const components = await import('../src/components/accounts/AccountsWorkspace');
-  console.log('components loaded'); Workspace = components.default;
+  Workspace = components.default;
   OrderedAccountRows = components.OrderedAccountRows;
   OrderedInstitutions = components.OrderedInstitutions;
   SyncButton = (await import('../src/components/transactions/SyncTransactionsButton')).default;
@@ -58,14 +58,14 @@ function render(child: ReactNode = workspace()) {
 }
 
 test('sync group excludes balance-only accounts and saves the chosen IDs across remounts', async () => {
-  console.log('rendering'); const { user, unmount } = render(); console.log('rendered');
-  await user.click(testing.screen.getByRole('button', { name: 'Choose accounts' })); console.log('choose opened');
+  const { user, unmount } = render();
+  await user.click(testing.screen.getByRole('button', { name: 'Choose accounts' }));
   assert.equal((testing.screen.getByRole('checkbox', { name: /Mortgage/ }) as HTMLInputElement).disabled, true);
   await user.click(testing.screen.getByRole('checkbox', { name: 'Credit card' }));
-  await user.click(testing.screen.getByRole('button', { name: 'Save selection' })); console.log('selection saved');
-  await testing.waitFor(() => assert.equal(testing.screen.queryByRole('dialog'), null));
+  await user.click(testing.screen.getByRole('button', { name: 'Save selection' }));
+  await testing.waitFor(() => assert.equal(Boolean(document.querySelector('[role="dialog"]')), false));
   unmount();
-  console.log('unmounted'); const next = render(); console.log('remounted');
+  const next = render();
   await next.user.click(testing.screen.getByRole('button', { name: 'Sync selected (1)' }));
   await testing.waitFor(() => assert.deepEqual(requests[0], { mode: 'latest', account_ids: ['a'] }));
   assert.equal(testing.screen.queryByText('Extra diagnostic detail'), null);
@@ -89,7 +89,7 @@ test('arranging institutions and accounts changes the rendered order and survive
   await user.click(testing.screen.getByRole('button', { name: 'Move Credit union up' }));
   await user.click(testing.screen.getByRole('button', { name: 'Move Mortgage up' }));
   await user.click(testing.screen.getByRole('button', { name: 'Save order' }));
-  await testing.waitFor(() => assert.equal(testing.screen.queryByRole('dialog'), null));
+  await testing.waitFor(() => assert.equal(Boolean(document.querySelector('[role="dialog"]')), false));
   assert.deepEqual(testing.screen.getAllByRole('region').map((node) => node.getAttribute('aria-label')), ['credit', 'bank']);
   assert.deepEqual(testing.within(testing.screen.getByRole('region', { name: 'bank' })).getAllByRole('row').map((node) => node.textContent), ['Mortgage', 'Checking']);
   unmount(); render();
