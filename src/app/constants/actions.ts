@@ -110,7 +110,7 @@ function getRolloverSettings(formData: FormData): {
 }
 
 async function getCurrentUserId(): Promise<string> {
-  const supabase = createServerSupabaseClient();
+  const supabase = await createServerSupabaseClient();
   const {
     data: { user },
     error,
@@ -138,7 +138,7 @@ export async function seedWorkbookConstants() {
     return;
   }
 
-  const supabase = createServerSupabaseClient();
+  const supabase = await createServerSupabaseClient();
   const rolloverStartDate = `${new Date().getFullYear()}-01-01`;
   const { error } = await supabase.rpc('seed_workbook_constants');
 
@@ -171,7 +171,7 @@ export async function updateCategorySettings(formData: FormData) {
   const startMonth = getRequiredMonth(formData);
   const amountCents = parseCurrencyToCents(getRequiredString(formData, 'amount'));
   const rolloverSettings = getRolloverSettings(formData);
-  const supabase = createServerSupabaseClient();
+  const supabase = await createServerSupabaseClient();
 
   const { data: parentCategory, error: parentError } = await supabase
     .from('categories')
@@ -284,7 +284,7 @@ export async function updateCategoryGroupTarget(formData: FormData) {
   const categoryId = getRequiredString(formData, 'categoryId');
   const householdId = getRequiredString(formData, 'householdId');
   const targetPercent = getOptionalPercent(formData, 'targetPercent');
-  const supabase = createServerSupabaseClient();
+  const supabase = await createServerSupabaseClient();
 
   const { error } = await supabase
     .from('categories')
@@ -303,7 +303,7 @@ export async function updateCategoryGroupTarget(formData: FormData) {
 export async function deleteCategory(formData: FormData) {
   const categoryId = getRequiredString(formData, 'categoryId');
   const householdId = getRequiredString(formData, 'householdId');
-  const supabase = createServerSupabaseClient();
+  const supabase = await createServerSupabaseClient();
 
   const { error } = await supabase
     .from('categories')
@@ -328,7 +328,7 @@ export async function updateFixedRecurringValue(formData: FormData) {
   const amountCents = parseCurrencyToCents(getRequiredString(formData, 'amount'));
   const name = getOptionalString(formData, 'name');
   const categoryId = getOptionalString(formData, 'categoryId');
-  const supabase = createServerSupabaseClient();
+  const supabase = await createServerSupabaseClient();
 
   if (billingFrequency !== 'monthly' && billingFrequency !== 'yearly') {
     throw new Error('Invalid billing frequency');
@@ -411,7 +411,7 @@ export async function updateFixedRecurringValue(formData: FormData) {
 export async function deleteRecurringValue(formData: FormData) {
   const recurringValueId = getRequiredString(formData, 'recurringValueId');
   const householdId = getRequiredString(formData, 'householdId');
-  const supabase = createServerSupabaseClient();
+  const supabase = await createServerSupabaseClient();
 
   const { error } = await supabase
     .from('recurring_values')
@@ -435,7 +435,7 @@ export async function updateRecurringFormula(formData: FormData) {
   const dependencyIds = formData
     .getAll('dependencyIds')
     .filter((value): value is string => typeof value === 'string' && Boolean(value.trim()));
-  const supabase = createServerSupabaseClient();
+  const supabase = await createServerSupabaseClient();
 
   if (formulaOperator !== 'sum' && formulaOperator !== 'negative_sum') {
     throw new Error('Invalid formula operator');
@@ -549,7 +549,7 @@ export async function updateTag(formData: FormData) {
   const householdId = getRequiredString(formData, 'householdId');
   const name = getRequiredString(formData, 'name');
   const color = getOptionalColor(formData, 'color');
-  const supabase = createServerSupabaseClient();
+  const supabase = await createServerSupabaseClient();
 
   const { error } = await supabase.from('tags').update({ name, color }).eq('id', tagId).eq('household_id', householdId);
 
@@ -565,7 +565,7 @@ export async function createTag(formData: FormData) {
   const name = getRequiredString(formData, 'name');
   const color = getOptionalColor(formData, 'color');
   const userId = await getCurrentUserId();
-  const supabase = createServerSupabaseClient();
+  const supabase = await createServerSupabaseClient();
 
   const { error } = await supabase.from('tags').insert({
     user_id: userId,
@@ -584,7 +584,7 @@ export async function createTag(formData: FormData) {
 export async function deleteTag(formData: FormData) {
   const tagId = getRequiredString(formData, 'tagId');
   const householdId = getRequiredString(formData, 'householdId');
-  const supabase = createServerSupabaseClient();
+  const supabase = await createServerSupabaseClient();
 
   const { error } = await supabase.from('tags').delete().eq('id', tagId).eq('household_id', householdId);
 
@@ -604,7 +604,7 @@ export async function createCategory(formData: FormData) {
   const amountCents = parseCurrencyToCents(getRequiredString(formData, 'amount'));
   const rolloverSettings = getRolloverSettings(formData);
   const userId = await getCurrentUserId();
-  const supabase = createServerSupabaseClient();
+  const supabase = await createServerSupabaseClient();
 
   const { data: parentCategory, error: parentError } = await supabase
     .from('categories')
@@ -693,7 +693,7 @@ export async function createRecurringValue(formData: FormData) {
   const billingFrequency = getRequiredString(formData, 'billingFrequency');
   const amountCents = parseCurrencyToCents(getRequiredString(formData, 'amount'));
   const userId = await getCurrentUserId();
-  const supabase = createServerSupabaseClient();
+  const supabase = await createServerSupabaseClient();
 
   if (billingFrequency !== 'monthly' && billingFrequency !== 'yearly') {
     throw new Error('Invalid billing frequency');
@@ -758,7 +758,7 @@ export async function createRecurringFormula(formData: FormData) {
     .getAll('dependencyIds')
     .filter((value): value is string => typeof value === 'string' && Boolean(value.trim()));
   const userId = await getCurrentUserId();
-  const supabase = createServerSupabaseClient();
+  const supabase = await createServerSupabaseClient();
 
   if (formulaOperator !== 'sum' && formulaOperator !== 'negative_sum') {
     throw new Error('Invalid formula operator');

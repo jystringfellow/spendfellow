@@ -100,7 +100,7 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: 'start_date must be a date in YYYY-MM-DD format.' }, { status: 400 });
   }
 
-  const supabase = createServerSupabaseClient();
+  const supabase = await createServerSupabaseClient();
   const {
     data: { user },
     error: userError,

@@ -1,4 +1,4 @@
-import Link from 'next/link';
+import Link from '@/components/common/Link';
 import { redirect } from 'next/navigation';
 import { Fragment } from 'react';
 import {
@@ -52,10 +52,10 @@ const MONTHLY_TRAILING_ROWS = 3;
 const MONTHLY_STICKY_ROW_HEIGHT = 22;
 
 interface BudgetsPageProps {
-  searchParams?: {
+  searchParams?: Promise<{
     year?: string;
     sheet?: string;
-  };
+  }>;
 }
 
 interface MonthlyDetailLine extends BudgetActualLine {
@@ -619,12 +619,13 @@ function getYearBalanceRows(
   ];
 }
 
-export default async function BudgetsPage({ searchParams }: BudgetsPageProps) {
+export default async function BudgetsPage({ searchParams: searchParamsPromise }: BudgetsPageProps) {
+  const searchParams = await searchParamsPromise;
   const selectedYear = getSelectedYear(searchParams?.year);
   const selectedSheet = getSelectedSheet(searchParams?.sheet);
   const selectedMonth = getSelectedMonth(selectedSheet);
   const { startDate, endDate } = getMonthDateRange(selectedYear, selectedMonth);
-  const supabase = createServerSupabaseClient();
+  const supabase = await createServerSupabaseClient();
   const {
     data: { user },
   } = await supabase.auth.getUser();

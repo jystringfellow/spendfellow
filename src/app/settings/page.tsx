@@ -10,14 +10,15 @@ import { createServerSupabaseClient } from '@/lib/supabaseServer';
 export const dynamic = 'force-dynamic';
 
 interface SettingsPageProps {
-  searchParams?: {
+  searchParams?: Promise<{
     year?: string;
     month?: string;
-  };
+  }>;
 }
 
-export default async function SettingsPage({ searchParams }: SettingsPageProps) {
-  const supabase = createServerSupabaseClient();
+export default async function SettingsPage({ searchParams: searchParamsPromise }: SettingsPageProps) {
+  const searchParams = await searchParamsPromise;
+  const supabase = await createServerSupabaseClient();
   const {
     data: { user },
   } = await supabase.auth.getUser();

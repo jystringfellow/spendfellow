@@ -4,11 +4,12 @@ import { createServerSupabaseClient } from '@/lib/supabaseServer';
 import { createServiceSupabaseClient } from '@/lib/supabaseService';
 
 interface RouteParams {
-  params: { transactionId: string };
+  params: Promise<{ transactionId: string }>;
 }
 
-export async function DELETE(_request: Request, { params }: RouteParams) {
-  const supabase = createServerSupabaseClient();
+export async function DELETE(_request: Request, { params: paramsPromise }: RouteParams) {
+  const params = await paramsPromise;
+  const supabase = await createServerSupabaseClient();
   const {
     data: { user },
     error: userError,

@@ -7,7 +7,7 @@ For Vercel deployment and the public-template/private-deployment repository patt
 ## Prerequisites
 
 Before you begin, ensure you have:
-- **Node.js 20+** and pnpm installed
+- **Node.js 22+** (Node.js 24 LTS recommended) and pnpm installed
 - A **Docker-compatible runtime** for local database validation
 - A **Supabase account** (free tier available at [supabase.com](https://supabase.com))
 - A **Plaid account** (free sandbox at [plaid.com](https://plaid.com))
@@ -164,7 +164,7 @@ The application should start and be available at [http://localhost:3000](http://
 
 You should see:
 ```
-▲ Next.js 14.2.35
+▲ Next.js 16.4.6
 - Local:        http://localhost:3000
 ```
 

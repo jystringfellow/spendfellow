@@ -10,7 +10,7 @@ import {
   TextField,
   Typography,
 } from '@mui/material';
-import Link from 'next/link';
+import Link from '@/components/common/Link';
 import CategorizationModeButton from '@/components/transactions/CategorizationModeButton';
 import TransactionsTable, { AmazonTransactionMatch, EditableTransactionRow } from '@/components/transactions/TransactionsTable';
 import ManualTransactionDialog, { type ManualTransactionAccountOption } from '@/components/transactions/ManualTransactionDialog';
@@ -35,7 +35,7 @@ const PAGE_SIZE = 50;
 const SORT_COLUMNS = ['date', 'amount_cents', 'merchant_name', 'description'] as const;
 
 interface TransactionsPageProps {
-  searchParams?: {
+  searchParams?: Promise<{
     accountId?: string;
     categoryId?: string;
     dir?: string;
@@ -44,7 +44,7 @@ interface TransactionsPageProps {
     q?: string;
     sort?: string;
     to?: string;
-  };
+  }>;
 }
 
 function getSelectedPage(pageParam: string | undefined) {
@@ -71,7 +71,7 @@ function getSearchText(value: string | undefined) {
 }
 
 function buildTransactionsHref(
-  currentParams: TransactionsPageProps['searchParams'],
+  currentParams: Awaited<TransactionsPageProps['searchParams']>,
   updates: Record<string, string | number | null>
 ) {
   const params = new URLSearchParams();
@@ -135,8 +135,9 @@ function createAmazonMatch(
   };
 }
 
-export default async function TransactionsPage({ searchParams }: TransactionsPageProps) {
-  const supabase = createServerSupabaseClient();
+export default async function TransactionsPage({ searchParams: searchParamsPromise }: TransactionsPageProps) {
+  const searchParams = await searchParamsPromise;
+  const supabase = await createServerSupabaseClient();
   const {
     data: { user },
   } = await supabase.auth.getUser();

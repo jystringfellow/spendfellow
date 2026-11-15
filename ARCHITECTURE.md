@@ -11,8 +11,8 @@ Spendfellow is a personal finance tracking application designed with the followi
 ## Technology Stack
 
 ### Frontend
-- **Next.js 14+**: React framework with App Router for server-side rendering and routing
-- **React 18**: UI library for building components
+- **Next.js 16**: React framework with App Router for server-side rendering and routing
+- **React 19**: UI library for building components
 - **TypeScript**: Type-safe development
 - **Material-UI (MUI)**: Component library for consistent, accessible UI
 - **Emotion**: CSS-in-JS styling (comes with MUI)

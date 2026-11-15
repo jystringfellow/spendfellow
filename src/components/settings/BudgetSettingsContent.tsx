@@ -16,7 +16,7 @@ import {
   Typography,
 } from '@mui/material';
 import { redirect } from 'next/navigation';
-import Link from 'next/link';
+import Link from '@/components/common/Link';
 import { formatCurrency } from '@/lib/money';
 import { resolveCategoryLayout } from '@/lib/categoryLayouts';
 import {
@@ -184,7 +184,7 @@ export async function BudgetSettingsContent({ searchParams, embedded = false, tr
     );
   }
 
-  const supabase = createServerSupabaseClient();
+  const supabase = await createServerSupabaseClient();
   const {
     data: { user },
   } = await supabase.auth.getUser();

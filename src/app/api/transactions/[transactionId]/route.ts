@@ -20,9 +20,9 @@ interface UpdateTransactionPayload {
 }
 
 interface RouteParams {
-  params: {
+  params: Promise<{
     transactionId: string;
-  };
+  }>;
 }
 
 function normalizeNotes(notes: string | null | undefined): string | null | undefined {
@@ -65,9 +65,10 @@ function normalizeBudgetGroupName(name: string | null | undefined): string | nul
   return normalizedName.length > 0 ? normalizedName : null;
 }
 
-export async function PATCH(request: NextRequest, { params }: RouteParams) {
+export async function PATCH(request: NextRequest, { params: paramsPromise }: RouteParams) {
+  const params = await paramsPromise;
   const payload = (await request.json()) as UpdateTransactionPayload;
-  const supabase = createServerSupabaseClient();
+  const supabase = await createServerSupabaseClient();
   const {
     data: { user },
     error: userError,

@@ -29,7 +29,7 @@ interface CreateLinkPayload {
 }
 
 async function getAuthenticatedHousehold() {
-  const supabase = createServerSupabaseClient();
+  const supabase = await createServerSupabaseClient();
   const {
     data: { user },
     error: userError,

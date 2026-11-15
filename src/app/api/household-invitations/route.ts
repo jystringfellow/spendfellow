@@ -19,7 +19,7 @@ interface MemberResponse extends HouseholdMember {
 }
 
 async function getSignedInUser() {
-  const supabase = createServerSupabaseClient();
+  const supabase = await createServerSupabaseClient();
   const {
     data: { user },
     error,

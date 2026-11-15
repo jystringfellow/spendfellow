@@ -86,6 +86,10 @@ function PlaidLinkSession({
     token,
     onSuccess: (publicToken, metadata) => {
       closeSession();
+      if (!publicToken) {
+        onError('Plaid did not return a public token. Start the connection again.');
+        return;
+      }
       onSuccess(publicToken, metadata);
     },
     onExit: (plaidError: PlaidLinkError | null, metadata: PlaidLinkOnExitMetadata) => {

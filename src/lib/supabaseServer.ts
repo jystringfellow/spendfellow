@@ -2,8 +2,8 @@ import { cookies } from 'next/headers';
 import { createServerClient } from '@supabase/ssr';
 import { getSupabasePublicKey, getSupabaseUrl } from './supabaseEnv';
 
-export function createServerSupabaseClient() {
-  const cookieStore = cookies();
+export async function createServerSupabaseClient() {
+  const cookieStore = await cookies();
   const supabaseUrl = getSupabaseUrl();
   const supabasePublicKey = getSupabasePublicKey();
 
@@ -22,7 +22,7 @@ export function createServerSupabaseClient() {
             cookieStore.set(name, value, options);
           });
         } catch {
-          // Server Components cannot set cookies. Middleware refreshes sessions.
+          // Server Components cannot set cookies. Proxy refreshes sessions.
         }
       },
     },

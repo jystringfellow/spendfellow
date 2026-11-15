@@ -5,15 +5,16 @@ import { findPendingHouseholdInvitation } from '@/lib/householdInvitations';
 import { createServerSupabaseClient } from '@/lib/supabaseServer';
 
 interface SetPasswordPageProps {
-  searchParams?: {
+  searchParams?: Promise<{
     invitation?: string;
-  };
+  }>;
 }
 
 export const dynamic = 'force-dynamic';
 
-export default async function SetPasswordPage({ searchParams }: SetPasswordPageProps) {
-  const supabase = createServerSupabaseClient();
+export default async function SetPasswordPage({ searchParams: searchParamsPromise }: SetPasswordPageProps) {
+  const searchParams = await searchParamsPromise;
+  const supabase = await createServerSupabaseClient();
   const {
     data: { user },
   } = await supabase.auth.getUser();

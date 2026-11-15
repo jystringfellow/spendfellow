@@ -6,9 +6,9 @@ import { createServiceSupabaseClient } from '@/lib/supabaseService';
 import type { PlaidItem } from '@/types/database';
 
 interface RouteParams {
-  params: {
+  params: Promise<{
     itemId: string;
-  };
+  }>;
 }
 
 type TransactionCleanupMode = 'keep' | 'delete_all' | 'delete_before';
@@ -31,8 +31,9 @@ function isIsoDate(value: string | null): value is string {
   return Boolean(value && /^\d{4}-\d{2}-\d{2}$/.test(value));
 }
 
-export async function DELETE(request: NextRequest, { params }: RouteParams) {
-  const supabase = createServerSupabaseClient();
+export async function DELETE(request: NextRequest, { params: paramsPromise }: RouteParams) {
+  const params = await paramsPromise;
+  const supabase = await createServerSupabaseClient();
   const {
     data: { user },
     error: userError,

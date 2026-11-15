@@ -5,9 +5,9 @@ import { createServerSupabaseClient } from '@/lib/supabaseServer';
 import { createServiceSupabaseClient } from '@/lib/supabaseService';
 
 interface RouteParams {
-  params: {
+  params: Promise<{
     accountId: string;
-  };
+  }>;
 }
 
 interface UpdateAccountPayload {
@@ -24,7 +24,8 @@ function normalizeAccountName(value: unknown) {
   return trimmed.length > 0 ? trimmed.slice(0, 120) : null;
 }
 
-export async function PATCH(request: NextRequest, { params }: RouteParams) {
+export async function PATCH(request: NextRequest, { params: paramsPromise }: RouteParams) {
+  const params = await paramsPromise;
   const payload = (await request.json().catch(() => ({}))) as UpdateAccountPayload;
   const updates: { name?: string; balance_category?: UpdateAccountPayload['balance_category']; updated_at: string } = {
     updated_at: new Date().toISOString(),
@@ -52,7 +53,7 @@ export async function PATCH(request: NextRequest, { params }: RouteParams) {
     return NextResponse.json({ error: 'No account updates provided.' }, { status: 400 });
   }
 
-  const supabase = createServerSupabaseClient();
+  const supabase = await createServerSupabaseClient();
   const {
     data: { user },
     error: userError,

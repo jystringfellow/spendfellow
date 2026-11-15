@@ -38,7 +38,7 @@ export async function GET(request: Request) {
     return loginErrorRedirect(requestUrl, 'The authentication link is incomplete or invalid.');
   }
 
-  const supabase = createServerSupabaseClient();
+  const supabase = await createServerSupabaseClient();
   const { data, error } = await supabase.auth.verifyOtp({ token_hash: tokenHash, type });
   if (error || !data.user?.email) {
     return loginErrorRedirect(requestUrl, error?.message ?? 'The authentication link could not be verified.');

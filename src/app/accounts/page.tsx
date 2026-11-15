@@ -16,7 +16,7 @@ import {
   Tooltip,
   Typography,
 } from '@mui/material';
-import Link from 'next/link';
+import Link from '@/components/common/Link';
 import AccountBalanceCategorySelect from '@/components/accounts/AccountBalanceCategorySelect';
 import AccountNameEditor from '@/components/accounts/AccountNameEditor';
 import ManualAccountDialog from '@/components/accounts/ManualAccountDialog';
@@ -180,7 +180,7 @@ function getAccountWarnings(account: Account): string[] {
 }
 
 export default async function AccountsPage() {
-  const supabase = createServerSupabaseClient();
+  const supabase = await createServerSupabaseClient();
   const {
     data: { user },
   } = await supabase.auth.getUser();

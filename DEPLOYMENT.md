@@ -156,7 +156,7 @@ Keeping separate public and private checkouts makes it harder to accidentally pu
 
 1. Create a private GitHub repository for your deployment.
 2. Import that private repository in Vercel.
-3. Set the Vercel framework preset to Next.js.
+3. Set the Vercel framework preset to Next.js and the Node.js version to 24.x.
 4. Use `pnpm install --frozen-lockfile` as the install command if Vercel does not infer pnpm from `pnpm-lock.yaml`.
 5. Set all real environment variables in the Vercel dashboard.
 6. Keep `.env.local` local only.
