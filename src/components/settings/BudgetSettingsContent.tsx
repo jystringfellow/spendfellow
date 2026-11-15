@@ -80,6 +80,7 @@ interface ConstantsPageProps {
     month?: string;
   };
   embedded?: boolean;
+  section?: 'budget' | 'recurring' | 'tags';
   trailingContent?: ReactNode;
 }
 
@@ -162,7 +163,7 @@ function getBalanceCategoryTotalCents(accounts: Account[], category: AccountBala
     }, 0);
 }
 
-export async function BudgetSettingsContent({ searchParams, embedded = false, trailingContent }: ConstantsPageProps) {
+export async function BudgetSettingsContent({ searchParams, embedded = false, trailingContent, section }: ConstantsPageProps) {
   const now = new Date();
   const selectedYear = Number(searchParams?.year) || now.getFullYear();
   const selectedMonth = clampMonth(Number(searchParams?.month) || now.getMonth() + 1);
@@ -318,7 +319,8 @@ export async function BudgetSettingsContent({ searchParams, embedded = false, tr
   const recurringFormulaRows = recurringRows.filter((value) => value.kind === 'formula');
 
   const content = (
-    <Box sx={{ my: embedded ? 0 : 4 }}>
+    <Box sx={{ my: embedded ? 0 : 4, '& .MuiTableCell-head': { whiteSpace: 'nowrap' }, '& .MuiTableCell-root': { fontVariantNumeric: 'tabular-nums' } }}>
+        {!embedded ? <>
         <Typography variant="h4" component="h1" gutterBottom>
           Budget Settings
         </Typography>
@@ -327,11 +329,14 @@ export async function BudgetSettingsContent({ searchParams, embedded = false, tr
         </Typography>
         {household && <Chip label={household.name} sx={{ mt: 2 }} />}
 
-        <Paper
+        </> : null}
+
+        {section !== 'tags' ? <Paper
           component="form"
           sx={{ p: 2, mt: 3, display: 'flex', flexWrap: 'wrap', gap: 2, alignItems: 'center' }}
         >
-          <Typography variant="subtitle2">Planning context</Typography>
+          {section ? <input type="hidden" name="section" value={section} /> : null}
+          <Typography variant="subtitle2">Planning period</Typography>
           <TextField
             name="year"
             label="Year"
@@ -357,29 +362,30 @@ export async function BudgetSettingsContent({ searchParams, embedded = false, tr
             ))}
           </TextField>
           <Button type="submit" variant="outlined">
-            View
+            Update period
           </Button>
-        </Paper>
+        </Paper> : null}
 
-        {groups.length === 0 && (
+        {groups.length === 0 && section !== 'tags' && (
           <Paper sx={{ p: 3, mt: 3 }}>
               <Typography variant="h6" component="h2" gutterBottom>
-                Seed Workbook Constants
+                Set up your budget
             </Typography>
             <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
               Add the category groups, default budgets, and recurring values from your current workbook.
             </Typography>
             <Box component="form" action={seedWorkbookConstants}>
               <Button type="submit" variant="contained">
-                Seed constants
+                Create starter budget
               </Button>
             </Box>
           </Paper>
         )}
 
-        {groups.length > 0 && (
+        {(groups.length > 0 || section === 'tags') && (
           <Box sx={{ display: 'grid', gap: 3, mt: 3 }}>
-            <Paper sx={{ p: 3 }}>
+            {(!section || section === 'budget') ? (
+            <Paper sx={{ p: { xs: 2, sm: 3 } }}>
               <Typography variant="h6" component="h2" gutterBottom>
                 Budget Groups
               </Typography>
@@ -447,8 +453,10 @@ export async function BudgetSettingsContent({ searchParams, embedded = false, tr
                 </Table>
               </TableContainer>
             </Paper>
+            ) : null}
 
-            <Paper sx={{ p: 3 }}>
+            {(!section || section === 'budget') ? (
+            <Paper sx={{ p: { xs: 2, sm: 3 } }}>
               <Box
                 sx={{
                   display: 'flex',
@@ -497,8 +505,10 @@ export async function BudgetSettingsContent({ searchParams, embedded = false, tr
                 </Table>
               </TableContainer>
             </Paper>
+            ) : null}
 
-            <Paper sx={{ p: 3 }}>
+            {(!section || section === 'budget') ? (
+            <Paper sx={{ p: { xs: 2, sm: 3 } }}>
               <Box
                 sx={{
                   display: 'flex',
@@ -623,9 +633,11 @@ export async function BudgetSettingsContent({ searchParams, embedded = false, tr
                 <Chip label={`Budget Total ${formatCurrency(totalBudgetCents)}`} color="primary" />
               </Box>
             </Paper>
+            ) : null}
 
-            <Paper sx={{ p: 3 }}>
-              <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 1, mb: 2 }}>
+            {(!section || section === 'recurring') ? (
+            <Paper sx={{ p: { xs: 2, sm: 3 } }}>
+              <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 1.5, mb: 2 }}>
                 <Typography variant="h6" component="h2">
                   Recurring Inputs
                 </Typography>
@@ -638,6 +650,9 @@ export async function BudgetSettingsContent({ searchParams, embedded = false, tr
                   categories={childCategories}
                 />
               </Box>
+              <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+                {recurringInputRows.length ? 'Regular bills and income used to calculate your monthly plan.' : 'No recurring inputs yet. Add your regular bills or income to start planning.'}
+              </Typography>
               <TableContainer>
                 <Table size="small" aria-label="recurring input constants">
                   <TableHead>
@@ -682,9 +697,11 @@ export async function BudgetSettingsContent({ searchParams, embedded = false, tr
                 </Table>
               </TableContainer>
             </Paper>
+            ) : null}
 
-            <Paper sx={{ p: 3 }}>
-              <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 1, mb: 2 }}>
+            {(!section || section === 'recurring') ? (
+            <Paper sx={{ p: { xs: 2, sm: 3 } }}>
+              <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 1.5, mb: 2 }}>
                 <Typography variant="h6" component="h2">
                   Recurring Formulas
                 </Typography>
@@ -696,6 +713,9 @@ export async function BudgetSettingsContent({ searchParams, embedded = false, tr
                   fixedOptions={recurringInputRows}
                 />
               </Box>
+              <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+                {recurringFormulaRows.length ? 'Calculated values based on your recurring inputs.' : 'No formulas yet. Add one when a planning value depends on other recurring inputs.'}
+              </Typography>
               <TableContainer>
                 <Table size="small" aria-label="recurring formula constants">
                   <TableHead>
@@ -733,14 +753,17 @@ export async function BudgetSettingsContent({ searchParams, embedded = false, tr
                 </Table>
               </TableContainer>
             </Paper>
+            ) : null}
 
-            <Paper sx={{ p: 3 }}>
-              <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 1, mb: 2 }}>
+            {(!section || section === 'tags') ? (
+            <Paper sx={{ p: { xs: 2, sm: 3 } }}>
+              <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 1.5, mb: 2 }}>
                 <Typography variant="h6" component="h2">
                   Tags
                 </Typography>
                 <TagDialogButton mode="add" action={createTag} householdId={household?.id ?? ''} />
               </Box>
+              {tags.length === 0 ? <Typography color="text.secondary" sx={{ mb: 2 }}>No tags yet. Add a tag to organize transactions across categories.</Typography> : null}
               <TableContainer>
                 <Table size="small" aria-label="tag settings">
                   <TableHead>
@@ -756,7 +779,7 @@ export async function BudgetSettingsContent({ searchParams, embedded = false, tr
                         <TableCell>{tag.name}</TableCell>
                         <TableCell>
                           <Box sx={{ display: 'inline-flex', alignItems: 'center', gap: 1 }}>
-                            <Box sx={{ width: 18, height: 18, borderRadius: 0.5, border: '1px solid #dadce0', bgcolor: tag.color ?? '#fff' }} />
+                            <Box sx={{ width: 18, height: 18, borderRadius: 0.5, border: '1px solid', borderColor: 'divider', bgcolor: tag.color ?? 'background.default' }} />
                             {tag.color ?? ''}
                           </Box>
                         </TableCell>
@@ -775,6 +798,7 @@ export async function BudgetSettingsContent({ searchParams, embedded = false, tr
                 </Table>
               </TableContainer>
             </Paper>
+            ) : null}
           </Box>
         )}
         {trailingContent ? <Box sx={{ mt: 3 }}>{trailingContent}</Box> : null}

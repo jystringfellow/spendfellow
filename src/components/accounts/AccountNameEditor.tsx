@@ -21,6 +21,7 @@ export default function AccountNameEditor({ accountId, name, officialName }: Acc
   const [error, setError] = useState<string | null>(null);
 
   async function saveName() {
+    if (isSaving) return;
     const normalizedName = draftName.replace(/\s+/g, ' ').trim();
     if (!normalizedName) {
       setError('Enter an account name.');
@@ -30,22 +31,24 @@ export default function AccountNameEditor({ accountId, name, officialName }: Acc
     setIsSaving(true);
     setError(null);
 
-    const response = await fetch(`/api/accounts/${accountId}`, {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name: normalizedName }),
-    });
-    const data = (await response.json().catch(() => ({}))) as { error?: string };
-
-    setIsSaving(false);
-
-    if (!response.ok) {
-      setError(data.error ?? 'Unable to rename account.');
-      return;
+    try {
+      const response = await fetch(`/api/accounts/${accountId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: normalizedName }),
+      });
+      const data = (await response.json().catch(() => ({}))) as { error?: string };
+      if (!response.ok) {
+        setError(data.error ?? 'Unable to rename account.');
+        return;
+      }
+      setIsEditing(false);
+      router.refresh();
+    } catch {
+      setError('Unable to reach the server. Your name is kept; try saving again.');
+    } finally {
+      setIsSaving(false);
     }
-
-    setIsEditing(false);
-    router.refresh();
   }
 
   if (isEditing) {
@@ -53,6 +56,7 @@ export default function AccountNameEditor({ accountId, name, officialName }: Acc
       <Stack spacing={1}>
         <Stack direction="row" spacing={0.75} alignItems="center">
           <TextField
+            autoFocus
             size="small"
             label="Account name"
             value={draftName}
@@ -62,7 +66,7 @@ export default function AccountNameEditor({ accountId, name, officialName }: Acc
                 event.preventDefault();
                 void saveName();
               }
-              if (event.key === 'Escape') {
+              if (event.key === 'Escape' && !isSaving) {
                 setDraftName(name);
                 setError(null);
                 setIsEditing(false);
@@ -73,7 +77,7 @@ export default function AccountNameEditor({ accountId, name, officialName }: Acc
           />
           <Tooltip title="Save name">
             <span>
-              <IconButton size="small" color="primary" onClick={() => void saveName()} disabled={isSaving}>
+              <IconButton aria-label="Save account name" size="small" color="primary" onClick={() => void saveName()} disabled={isSaving}>
                 <CheckIcon fontSize="small" />
               </IconButton>
             </span>
@@ -82,6 +86,7 @@ export default function AccountNameEditor({ accountId, name, officialName }: Acc
             <span>
               <IconButton
                 size="small"
+                aria-label="Cancel rename"
                 onClick={() => {
                   setDraftName(name);
                   setError(null);
@@ -113,6 +118,7 @@ export default function AccountNameEditor({ accountId, name, officialName }: Acc
         <Tooltip title="Rename account">
           <IconButton
             size="small"
+            aria-label={`Rename ${name}`}
             onClick={() => {
               setDraftName(name);
               setError(null);

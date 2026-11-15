@@ -1,10 +1,11 @@
 'use client';
 
-import { createContext, ReactNode, useContext, useEffect, useMemo, useState } from 'react';
+import { createContext, ReactNode, useContext, useId, useEffect, useMemo, useState } from 'react';
 import {
   Box,
   Button,
   Collapse,
+  Chip,
   Divider,
   IconButton,
   Paper,
@@ -46,11 +47,15 @@ export function LinkedInstitutionCollapseProvider({ children }: { children: Reac
 }
 
 interface LinkedInstitutionCardProps {
+  orderId?: string;
   title: string;
   info: ReactNode;
   actions?: ReactNode;
   children: ReactNode;
   defaultOpen?: boolean;
+  summary?: string;
+  status?: string;
+  lastSynced?: string;
 }
 
 export function LinkedInstitutionCard({
@@ -59,7 +64,11 @@ export function LinkedInstitutionCard({
   actions,
   children,
   defaultOpen = true,
+  summary,
+  status,
+  lastSynced,
 }: LinkedInstitutionCardProps) {
+  const contentId = useId();
   const collapseContext = useContext(CollapseContext);
   const [isOpen, setIsOpen] = useState(defaultOpen);
 
@@ -79,15 +88,25 @@ export function LinkedInstitutionCard({
     <Paper sx={{ overflow: 'hidden' }}>
       <Box sx={{ p: 2.5 }}>
         <Stack direction={{ xs: 'column', md: 'row' }} justifyContent="space-between" spacing={2}>
-          <Stack direction="row" spacing={1} alignItems="center">
+          <Stack direction="row" spacing={1} alignItems="center" useFlexGap sx={{ flexWrap: 'wrap' }}>
             <IconButton
               size="small"
               aria-label={isOpen ? `Collapse ${title}` : `Expand ${title}`}
+              aria-expanded={isOpen}
+              aria-controls={contentId}
               onClick={() => setIsOpen((open) => !open)}
             >
               {isOpen ? <ExpandLessIcon fontSize="small" /> : <ExpandMoreIcon fontSize="small" />}
             </IconButton>
-            <Typography variant="h6">{title}</Typography>
+            <Box sx={{ minWidth: 0 }}>
+              <Button color="inherit" onClick={() => setIsOpen((open) => !open)} aria-expanded={isOpen} aria-controls={contentId}
+                sx={{ p: 0, minWidth: 0, justifyContent: 'flex-start', textAlign: 'left' }}>
+                <Typography variant="h6" component="span">{title}</Typography>
+              </Button>
+              {summary ? <Typography variant="body2" color="text.secondary">{summary}</Typography> : null}
+              {lastSynced ? <Typography variant="caption" color="text.secondary">Last synced: {lastSynced}</Typography> : null}
+            </Box>
+            {status ? <Chip size="small" variant="outlined" color={status === 'Connected' ? 'success' : status === 'Needs attention' ? 'warning' : 'default'} label={status} /> : null}
             <Tooltip title={info}>
               <IconButton size="small" aria-label={`${title} sync details`}>
                 <InfoOutlinedIcon fontSize="small" />
@@ -101,7 +120,7 @@ export function LinkedInstitutionCard({
           ) : null}
         </Stack>
       </Box>
-      <Collapse in={isOpen} timeout="auto" unmountOnExit>
+      <Collapse id={contentId} in={isOpen} timeout="auto" unmountOnExit>
         <Divider />
         {children}
       </Collapse>
@@ -118,6 +137,7 @@ interface CollapsibleSectionProps {
 
 export function CollapsibleSection({ title, description, children, defaultOpen = false }: CollapsibleSectionProps) {
   const [isOpen, setIsOpen] = useState(defaultOpen);
+  const contentId = useId();
 
   return (
     <Paper sx={{ overflow: 'hidden' }}>
@@ -126,12 +146,17 @@ export function CollapsibleSection({ title, description, children, defaultOpen =
           <IconButton
             size="small"
             aria-label={isOpen ? `Collapse ${title}` : `Expand ${title}`}
+            aria-expanded={isOpen}
+            aria-controls={contentId}
             onClick={() => setIsOpen((open) => !open)}
           >
             {isOpen ? <ExpandLessIcon fontSize="small" /> : <ExpandMoreIcon fontSize="small" />}
           </IconButton>
           <Box>
-            <Typography variant="h6">{title}</Typography>
+            <Button color="inherit" onClick={() => setIsOpen((open) => !open)} aria-expanded={isOpen} aria-controls={contentId}
+              sx={{ p: 0, minWidth: 0, justifyContent: 'flex-start' }}>
+              <Typography variant="h6" component="span">{title}</Typography>
+            </Button>
             {description ? (
               <Typography variant="body2" color="text.secondary">
                 {description}
@@ -140,7 +165,7 @@ export function CollapsibleSection({ title, description, children, defaultOpen =
           </Box>
         </Stack>
       </Box>
-      <Collapse in={isOpen} timeout="auto" unmountOnExit>
+      <Collapse id={contentId} in={isOpen} timeout="auto" unmountOnExit>
         <Divider />
         {children}
       </Collapse>

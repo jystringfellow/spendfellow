@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import {
   Alert,
@@ -26,16 +26,16 @@ import {
   TextField,
   Typography,
 } from '@mui/material';
-import SaveIcon from '@mui/icons-material/Save';
-import CheckIcon from '@mui/icons-material/Check';
-import CallSplitIcon from '@mui/icons-material/CallSplit';
+import EditOutlinedIcon from '@mui/icons-material/EditOutlined';
+import Snackbar from '@mui/material/Snackbar';
+import CategorizationModeButton from './CategorizationModeButton';
 import { formatCurrency } from '@/lib/money';
-import CreditCardPaymentLinkButton, { type CreditCardPaymentLinkSummary } from './CreditCardPaymentLinkButton';
-import FunMoneyAllocationButton, {
+import { type CreditCardPaymentLinkSummary } from './CreditCardPaymentLinkButton';
+import {
   type FunMoneyAllocationSummary,
 } from './FunMoneyAllocationButton';
-import ManualTransactionDialog, { type ManualTransactionAccountOption } from './ManualTransactionDialog';
-import TagAutocomplete from './TagAutocomplete';
+import { type ManualTransactionAccountOption } from './ManualTransactionDialog';
+import CategoryPicker from './CategoryPicker';
 import type {
   BudgetTransactionGroup,
   Category,
@@ -47,6 +47,7 @@ import type {
 const CREATE_BUDGET_GROUP_VALUE = '__create_budget_group__';
 
 export interface EditableTransactionRow extends Transaction {
+  transaction_splits?: { id: string; amount_cents: number; category_id: string | null; notes: string | null; tag_ids: string[] }[];
   accounts: {
     name: string;
     type: string;
@@ -99,32 +100,6 @@ interface TransactionsTableProps {
   budgetGroups: Pick<BudgetTransactionGroup, 'id' | 'name'>[];
 }
 
-interface RowDraft {
-  budgetGroupId: string;
-  budgetGroupName: string;
-  categoryId: string;
-  notes: string;
-  tagIds: string[];
-  tagNames: string[];
-  isSaving: boolean;
-  error: string | null;
-  saved: boolean;
-}
-
-function createDraft(transaction: EditableTransactionRow): RowDraft {
-  return {
-    budgetGroupId: transaction.budget_group?.id ?? '',
-    budgetGroupName: '',
-    categoryId: transaction.category_id ?? '',
-    notes: transaction.notes ?? '',
-    tagIds: transaction.transaction_tag_ids,
-    tagNames: [],
-    isSaving: false,
-    error: null,
-    saved: false,
-  };
-}
-
 export default function TransactionsTable({
   transactions,
   categories,
@@ -137,6 +112,7 @@ export default function TransactionsTable({
   const [budgetGroupOptions, setBudgetGroupOptions] = useState(budgetGroups);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [bulkEditorOpen, setBulkEditorOpen] = useState(false);
+  const [discardBulk, setDiscardBulk] = useState(false);
   const [applyBulkCategory, setApplyBulkCategory] = useState(false);
   const [bulkCategoryId, setBulkCategoryId] = useState('');
   const [applyBulkTags, setApplyBulkTags] = useState(false);
@@ -147,134 +123,17 @@ export default function TransactionsTable({
   const [bulkBudgetGroupName, setBulkBudgetGroupName] = useState('');
   const [isBulkSaving, setIsBulkSaving] = useState(false);
   const [bulkError, setBulkError] = useState<string | null>(null);
-  const [drafts, setDrafts] = useState<Record<string, RowDraft>>(() =>
-    Object.fromEntries(transactions.map((transaction) => [transaction.id, createDraft(transaction)]))
-  );
-  const savedTimersRef = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
+  const [editorSession, setEditorSession] = useState<{ initial: EditableTransactionRow; transactions: EditableTransactionRow[] } | null>(null);
+  function openEditor(transaction: EditableTransactionRow) {
+    setEditorSession({ initial: transaction, transactions: [...transactions] });
+  }
+  const [notice, setNotice] = useState('');
 
+  useEffect(() => { setTagOptions(tags); }, [tags]);
+  useEffect(() => { setBudgetGroupOptions(budgetGroups); }, [budgetGroups]);
   useEffect(() => {
-    setTagOptions(tags);
-  }, [tags]);
-
-  useEffect(() => {
-    setBudgetGroupOptions(budgetGroups);
-  }, [budgetGroups]);
-
-  useEffect(() => {
-    setDrafts((currentDrafts) =>
-      Object.fromEntries(
-        transactions.map((transaction) => {
-          const currentDraft = currentDrafts[transaction.id];
-          if (currentDraft?.isSaving || currentDraft?.saved) {
-            return [transaction.id, currentDraft];
-          }
-
-          return [transaction.id, createDraft(transaction)];
-        })
-      )
-    );
-    setSelectedIds(
-      (currentIds) =>
-        new Set(
-          [...currentIds].filter((transactionId) =>
-            transactions.some((transaction) => transaction.id === transactionId)
-          )
-        )
-    );
+    setSelectedIds((current) => new Set([...current].filter((id) => transactions.some((transaction) => transaction.id === id))));
   }, [transactions]);
-
-  function updateDraft(transactionId: string, updates: Partial<RowDraft>) {
-    setDrafts((currentDrafts) => ({
-      ...currentDrafts,
-      [transactionId]: {
-        ...currentDrafts[transactionId],
-        ...updates,
-        saved: updates.saved ?? false,
-      },
-    }));
-  }
-
-  async function saveTransaction(transactionId: string) {
-    const draft = drafts[transactionId];
-    if (draft.isSaving || draft.saved) {
-      return;
-    }
-
-    if (savedTimersRef.current[transactionId]) {
-      clearTimeout(savedTimersRef.current[transactionId]);
-      delete savedTimersRef.current[transactionId];
-    }
-
-    if (draft.budgetGroupId === CREATE_BUDGET_GROUP_VALUE && !draft.budgetGroupName.trim()) {
-      updateDraft(transactionId, { error: 'Enter a name for the new budget group.' });
-      return;
-    }
-
-    updateDraft(transactionId, { isSaving: true, error: null, saved: false });
-
-    const response = await fetch(`/api/transactions/${transactionId}`, {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        budget_group_id:
-          draft.budgetGroupId && draft.budgetGroupId !== CREATE_BUDGET_GROUP_VALUE
-            ? draft.budgetGroupId
-            : null,
-        budget_group_name:
-          draft.budgetGroupId === CREATE_BUDGET_GROUP_VALUE ? draft.budgetGroupName : null,
-        category_id: draft.categoryId || null,
-        notes: draft.notes,
-        tag_ids: draft.tagIds,
-        tag_names: draft.tagNames,
-      }),
-    });
-    const data = (await response.json()) as {
-      budget_group?: Pick<BudgetTransactionGroup, 'id' | 'name'> | null;
-      error?: string;
-      tags?: Pick<Tag, 'id' | 'name' | 'color'>[];
-    };
-
-    if (!response.ok) {
-      updateDraft(transactionId, { isSaving: false, error: data.error ?? 'Unable to save transaction.' });
-      return;
-    }
-
-    if (data.tags?.length) {
-      setTagOptions((currentTags) => {
-        const tagById = new Map(currentTags.map((tag) => [tag.id, tag]));
-        data.tags?.forEach((tag) => tagById.set(tag.id, tag));
-        return Array.from(tagById.values()).sort((a, b) => a.name.localeCompare(b.name));
-      });
-      updateDraft(transactionId, {
-        tagIds: data.tags.map((tag) => tag.id),
-        tagNames: [],
-      });
-    }
-
-    if (data.budget_group) {
-      setBudgetGroupOptions((currentGroups) => {
-        const groupById = new Map(currentGroups.map((group) => [group.id, group]));
-        groupById.set(data.budget_group!.id, data.budget_group!);
-        return Array.from(groupById.values()).sort((left, right) => left.name.localeCompare(right.name));
-      });
-    }
-
-    updateDraft(transactionId, {
-      budgetGroupId: data.budget_group?.id ?? '',
-      budgetGroupName: '',
-      isSaving: false,
-      error: null,
-      saved: true,
-    });
-    savedTimersRef.current[transactionId] = setTimeout(() => {
-      updateDraft(transactionId, { saved: false });
-      delete savedTimersRef.current[transactionId];
-    }, 3_000);
-
-    if (draft.tagNames.length > 0 || draft.budgetGroupId === CREATE_BUDGET_GROUP_VALUE) {
-      router.refresh();
-    }
-  }
 
   function toggleSelected(transactionId: string) {
     setSelectedIds((currentIds) => {
@@ -300,9 +159,9 @@ export default function TransactionsTable({
   }
 
   function closeBulkEditor() {
-    if (!isBulkSaving) {
-      setBulkEditorOpen(false);
-    }
+    if (isBulkSaving) return;
+    if (applyBulkCategory || applyBulkTags || applyBulkBudgetGroup) setDiscardBulk(true);
+    else setBulkEditorOpen(false);
   }
 
   async function applyBulkEdits() {
@@ -331,68 +190,61 @@ export default function TransactionsTable({
     setIsBulkSaving(true);
     setBulkError(null);
 
-    const response = await fetch('/api/transactions/bulk', {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        transaction_ids: transactionIds,
-        category: applyBulkCategory ? { category_id: bulkCategoryId || null } : undefined,
-        tags: applyBulkTags ? { mode: bulkTagMode, tag_ids: bulkTagIds } : undefined,
-        budget_group: applyBulkBudgetGroup
-          ? {
-              group_id:
-                bulkBudgetGroupId && bulkBudgetGroupId !== CREATE_BUDGET_GROUP_VALUE
-                  ? bulkBudgetGroupId
-                  : null,
-              group_name:
-                bulkBudgetGroupId === CREATE_BUDGET_GROUP_VALUE ? bulkBudgetGroupName : null,
-            }
-          : undefined,
-      }),
-    });
-    const data = (await response.json().catch(() => ({}))) as {
-      budget_group?: Pick<BudgetTransactionGroup, 'id' | 'name'> | null;
-      error?: string;
-    };
+    try {
+      const response = await fetch('/api/transactions/bulk', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          transaction_ids: transactionIds,
+          category: applyBulkCategory ? { category_id: bulkCategoryId || null } : undefined,
+          tags: applyBulkTags ? { mode: bulkTagMode, tag_ids: bulkTagIds } : undefined,
+          budget_group: applyBulkBudgetGroup
+            ? {
+                group_id:
+                  bulkBudgetGroupId && bulkBudgetGroupId !== CREATE_BUDGET_GROUP_VALUE
+                    ? bulkBudgetGroupId
+                    : null,
+                group_name:
+                  bulkBudgetGroupId === CREATE_BUDGET_GROUP_VALUE ? bulkBudgetGroupName : null,
+              }
+            : undefined,
+        }),
+      });
+      const data = (await response.json().catch(() => ({}))) as {
+        budget_group?: Pick<BudgetTransactionGroup, 'id' | 'name'> | null;
+        error?: string;
+      };
 
-    if (!response.ok) {
+      if (!response.ok) {
+        setIsBulkSaving(false);
+        setBulkError(data.error ?? 'Unable to update the selected transactions.');
+        return;
+      }
+
+      if (data.budget_group) {
+          setBudgetGroupOptions((currentGroups) => {
+            const groupById = new Map(currentGroups.map((group) => [group.id, group]));
+            groupById.set(data.budget_group!.id, data.budget_group!);
+            return Array.from(groupById.values()).sort((left, right) => left.name.localeCompare(right.name));
+          });
+      }
+
+      setNotice(`Updated ${transactionIds.length} transactions.`);
+      setSelectedIds(new Set());
+      setBulkEditorOpen(false);
+      setApplyBulkCategory(false);
+      setApplyBulkTags(false);
+      setApplyBulkBudgetGroup(false);
+      setBulkTagIds([]);
+      setBulkBudgetGroupId('');
+      setBulkBudgetGroupName('');
       setIsBulkSaving(false);
-      setBulkError(data.error ?? 'Unable to update the selected transactions.');
-      return;
+      router.refresh();
+    } catch {
+      setBulkError('Unable to reach the server. Your selection is kept; try again.');
+    } finally {
+      setIsBulkSaving(false);
     }
-
-    if (data.budget_group) {
-        setBudgetGroupOptions((currentGroups) => {
-          const groupById = new Map(currentGroups.map((group) => [group.id, group]));
-          groupById.set(data.budget_group!.id, data.budget_group!);
-          return Array.from(groupById.values()).sort((left, right) => left.name.localeCompare(right.name));
-        });
-    }
-
-    transactionIds.forEach((transactionId) => {
-      const currentDraft = drafts[transactionId];
-      const nextTagIds = applyBulkTags
-        ? bulkTagMode === 'add'
-          ? Array.from(new Set([...(currentDraft?.tagIds ?? []), ...bulkTagIds]))
-          : (currentDraft?.tagIds ?? []).filter((tagId) => !bulkTagIds.includes(tagId))
-        : currentDraft?.tagIds;
-      updateDraft(transactionId, {
-          categoryId: applyBulkCategory ? bulkCategoryId : currentDraft?.categoryId,
-          tagIds: nextTagIds,
-          budgetGroupId: applyBulkBudgetGroup ? data.budget_group?.id ?? '' : currentDraft?.budgetGroupId,
-          budgetGroupName: '',
-        });
-    });
-    setSelectedIds(new Set());
-    setBulkEditorOpen(false);
-    setApplyBulkCategory(false);
-    setApplyBulkTags(false);
-    setApplyBulkBudgetGroup(false);
-    setBulkTagIds([]);
-    setBulkBudgetGroupId('');
-    setBulkBudgetGroupName('');
-    setIsBulkSaving(false);
-    router.refresh();
   }
 
   if (transactions.length === 0) {
@@ -401,7 +253,7 @@ export default function TransactionsTable({
 
   return (
     <>
-      <Box sx={{ px: 2, py: 1.5, bgcolor: 'grey.50', borderBottom: 1, borderColor: 'divider' }}>
+      {selectedIds.size > 0 ? <Box role="region" aria-label="Selected transactions" sx={{ position: 'sticky', top: 0, zIndex: 2, px: 2, py: 1.5, bgcolor: 'background.default', color: 'text.primary', borderBottom: 1, borderColor: 'divider' }}>
         <Stack direction={{ xs: 'column', md: 'row' }} spacing={1} alignItems={{ xs: 'stretch', md: 'center' }}>
           <Typography variant="body2" sx={{ minWidth: 150 }}>
             {selectedIds.size > 0 ? `${selectedIds.size} selected` : 'Select rows for bulk editing'}
@@ -421,9 +273,11 @@ export default function TransactionsTable({
             Clear selection
           </Button>
         </Stack>
-      </Box>
-      <Dialog open={bulkEditorOpen} onClose={closeBulkEditor} fullWidth maxWidth="sm">
-        <DialogTitle>Bulk edit {selectedIds.size} transactions</DialogTitle>
+      </Box> : <Typography variant="body2" color="text.secondary" sx={{ px: 2, py: 1.5 }}>
+        Click a transaction to edit it. Use the checkboxes to edit several at once.
+      </Typography>}
+      <Dialog aria-labelledby="bulk-editor-title" open={bulkEditorOpen} onClose={closeBulkEditor} fullWidth maxWidth="sm">
+        <DialogTitle id="bulk-editor-title">Bulk edit {selectedIds.size} transactions</DialogTitle>
         <DialogContent dividers>
           <Stack spacing={2.5}>
             <Box>
@@ -436,21 +290,13 @@ export default function TransactionsTable({
                 }
                 label="Change category"
               />
-              <Select
-                size="small"
-                fullWidth
-                displayEmpty
+              <CategoryPicker
+                categories={categories}
+                label="Bulk category"
                 value={bulkCategoryId}
-                onChange={(event) => setBulkCategoryId(event.target.value)}
+                onChange={setBulkCategoryId}
                 disabled={!applyBulkCategory || isBulkSaving}
-              >
-                <MenuItem value="">Uncategorized</MenuItem>
-                {categories.map((category) => (
-                  <MenuItem key={category.id} value={category.id}>
-                    {category.name}
-                  </MenuItem>
-                ))}
-              </Select>
+              />
               <Typography variant="caption" color="text.secondary">
                 Split transactions cannot have their category changed in bulk.
               </Typography>
@@ -572,247 +418,74 @@ export default function TransactionsTable({
         </DialogActions>
       </Dialog>
       <TableContainer sx={{ maxWidth: '100%', overflowX: 'auto' }}>
-      <Table stickyHeader sx={{ minWidth: 1540, tableLayout: 'fixed' }}>
-      <TableHead>
-        <TableRow>
-          <TableCell padding="checkbox" sx={{ width: 52 }}>
-            <Checkbox
-              checked={selectedIds.size === transactions.length}
-              indeterminate={selectedIds.size > 0 && selectedIds.size < transactions.length}
-              onChange={toggleAllSelected}
-              inputProps={{ 'aria-label': 'Select all transactions on this page' }}
-            />
-          </TableCell>
-          <TableCell sx={{ width: 112 }}>Date</TableCell>
-          <TableCell sx={{ width: 280 }}>Description</TableCell>
-          <TableCell sx={{ width: 160 }}>Account</TableCell>
-          <TableCell align="right" sx={{ width: 120 }}>
-            Amount
-          </TableCell>
-          <TableCell sx={{ width: 210 }}>Category</TableCell>
-          <TableCell sx={{ width: 220 }}>Budget group</TableCell>
-          <TableCell sx={{ width: 280 }}>Tags</TableCell>
-          <TableCell sx={{ width: 105 }}>Status</TableCell>
-          <TableCell sx={{ width: 260 }}>Notes</TableCell>
-          <TableCell
-            align="right"
-            sx={{
-              width: 120,
-              position: 'sticky',
-              right: 0,
-              bgcolor: 'background.paper',
-              borderLeft: 1,
-              borderColor: 'divider',
-              zIndex: 2,
-            }}
-          >
-            Save
-          </TableCell>
-        </TableRow>
-      </TableHead>
-      <TableBody>
-        {transactions.map((transaction) => {
-          const draft = drafts[transaction.id] ?? createDraft(transaction);
-          return (
-            <TableRow key={transaction.id} hover>
+        <Table stickyHeader sx={{ minWidth: 850 }} aria-label="Transactions">
+          <TableHead>
+            <TableRow>
               <TableCell padding="checkbox">
-                <Checkbox
-                  checked={selectedIds.has(transaction.id)}
-                  onChange={() => toggleSelected(transaction.id)}
-                  inputProps={{ 'aria-label': `Select ${transaction.merchant_name ?? transaction.description}` }}
-                />
+                <Checkbox checked={selectedIds.size === transactions.length}
+                  indeterminate={selectedIds.size > 0 && selectedIds.size < transactions.length}
+                  onChange={toggleAllSelected} inputProps={{ 'aria-label': 'Select all transactions on this page' }} />
               </TableCell>
-              <TableCell sx={{ whiteSpace: 'nowrap' }}>{transaction.date}</TableCell>
-              <TableCell>
-                <Stack spacing={0.25}>
-                  <Stack direction="row" spacing={0.75} alignItems="center" flexWrap="wrap">
-                    <Typography fontWeight={600}>{transaction.merchant_name ?? transaction.description}</Typography>
-                    {transaction.transaction_split_count > 0 ? (
-                      <Chip
-                        size="small"
-                        color="info"
-                        variant="outlined"
-                        icon={<CallSplitIcon />}
-                        label={`Split ${transaction.transaction_split_count}`}
-                      />
-                    ) : null}
-                    {transaction.source === 'manual' ? <Chip size="small" variant="outlined" label="Manual" /> : null}
-                    {transaction.credit_card_payment_link || transaction.budget_exclusion ? (
-                      <Chip
-                        size="small"
-                        color="secondary"
-                        variant="outlined"
-                        label={transaction.credit_card_payment_link ? 'CC payment · linked' : 'CC payment'}
-                      />
-                    ) : null}
-                  </Stack>
-                  {transaction.merchant_name ? (
-                    <Typography variant="body2" color="text.secondary">
-                      {transaction.description}
-                    </Typography>
-                  ) : null}
-                </Stack>
-              </TableCell>
-              <TableCell>{transaction.accounts?.name ?? '-'}</TableCell>
-              <TableCell align="right">{formatCurrency(transaction.amount_cents)}</TableCell>
-              <TableCell>
-                <Select
-                  size="small"
-                  fullWidth
-                  displayEmpty
-                  value={draft.categoryId}
-                  onChange={(event) => updateDraft(transaction.id, { categoryId: event.target.value })}
-                >
-                  <MenuItem value="">Uncategorized</MenuItem>
-                  {categories.map((category) => (
-                    <MenuItem key={category.id} value={category.id}>
-                      {category.name}
-                    </MenuItem>
-                  ))}
-                </Select>
-              </TableCell>
-              <TableCell>
-                <Stack spacing={0.75}>
-                  <Select
-                    size="small"
-                    fullWidth
-                    displayEmpty
-                    value={draft.budgetGroupId}
-                    onChange={(event) =>
-                      updateDraft(transaction.id, {
-                        budgetGroupId: event.target.value,
-                        budgetGroupName:
-                          event.target.value === CREATE_BUDGET_GROUP_VALUE
-                            ? draft.budgetGroupName
-                            : '',
-                      })
-                    }
-                  >
-                    <MenuItem value="">No group</MenuItem>
-                    {budgetGroupOptions.map((group) => (
-                      <MenuItem key={group.id} value={group.id}>
-                        {group.name}
-                      </MenuItem>
-                    ))}
-                    <Divider />
-                    <MenuItem value={CREATE_BUDGET_GROUP_VALUE}>Create new…</MenuItem>
-                  </Select>
-                  {draft.budgetGroupId === CREATE_BUDGET_GROUP_VALUE ? (
-                    <TextField
-                      size="small"
-                      value={draft.budgetGroupName}
-                      onChange={(event) =>
-                        updateDraft(transaction.id, { budgetGroupName: event.target.value })
-                      }
-                      placeholder="Group name"
-                      inputProps={{ maxLength: 80 }}
-                    />
-                  ) : null}
-                </Stack>
-              </TableCell>
-              <TableCell>
-                <TagAutocomplete
-                  tags={tagOptions}
-                  selectedTagIds={draft.tagIds}
-                  newTagNames={draft.tagNames}
-                  onChange={({ tagIds, tagNames }) => {
-                    updateDraft(transaction.id, {
-                      tagIds,
-                      tagNames,
-                    });
-                  }}
-                />
-              </TableCell>
-              <TableCell>
-                <Stack direction="row" spacing={0.75} flexWrap="wrap">
-                  <Chip size="small" label={transaction.pending ? 'Pending' : 'Posted'} />
-                  <CreditCardPaymentLinkButton
-                    transactionId={transaction.id}
-                    link={transaction.credit_card_payment_link ?? null}
-                    marked={transaction.budget_exclusion?.reason === 'credit_card_payment'}
-                    eligible={
-                      !transaction.pending &&
-                      ((transaction.accounts?.type === 'depository' && transaction.amount_cents > 0) ||
-                        (transaction.accounts?.type === 'credit' && transaction.amount_cents < 0))
-                    }
-                  />
-                  <FunMoneyAllocationButton
-                    transactionId={transaction.id}
-                    transactionDate={transaction.date}
-                    transactionAmountCents={transaction.amount_cents}
-                    transactionDescription={transaction.merchant_name ?? transaction.description}
-                    categories={categories}
-                    allocations={transaction.fun_money_allocations}
-                    eligible={
-                      !transaction.pending &&
-                      transaction.amount_cents < 0 &&
-                      !transaction.credit_card_payment_link &&
-                      !transaction.budget_exclusion
-                    }
-                  />
-                </Stack>
-              </TableCell>
-              <TableCell>
-                <TextField
-                  size="small"
-                  fullWidth
-                  value={draft.notes}
-                  onChange={(event) => updateDraft(transaction.id, { notes: event.target.value })}
-                  placeholder="Note"
-                />
-                {draft.error ? (
-                  <Alert severity="error" sx={{ mt: 1 }}>
-                    {draft.error}
-                  </Alert>
-                ) : null}
-              </TableCell>
-              <TableCell
-                align="right"
-                sx={{
-                  position: 'sticky',
-                  right: 0,
-                  bgcolor: 'background.paper',
-                  borderLeft: 1,
-                  borderColor: 'divider',
-                  zIndex: 1,
-                }}
-              >
-                <Stack spacing={0.75} alignItems="flex-end">
-                  <Button
-                    size="small"
-                    variant={draft.saved ? 'contained' : 'outlined'}
-                    color={draft.saved ? 'success' : 'primary'}
-                    startIcon={draft.saved ? <CheckIcon /> : <SaveIcon />}
-                    disabled={draft.isSaving}
-                    aria-disabled={draft.saved}
-                    onClick={() => void saveTransaction(transaction.id)}
-                    sx={{
-                      minWidth: 96,
-                      ...(draft.saved
-                        ? {
-                            pointerEvents: 'none',
-                          }
-                        : {}),
-                    }}
-                  >
-                    {draft.isSaving ? 'Saving' : draft.saved ? 'Saved' : 'Save'}
-                  </Button>
-                  {transaction.source === 'manual' ? (
-                    <ManualTransactionDialog
-                      accounts={accounts}
-                      categories={categories}
-                      transaction={transaction}
-                      compact
-                    />
-                  ) : null}
-                </Stack>
-              </TableCell>
+              <TableCell>Date</TableCell><TableCell>Transaction</TableCell><TableCell>Account</TableCell>
+              <TableCell align="right">Amount</TableCell><TableCell>Category</TableCell><TableCell>Tags</TableCell><TableCell />
             </TableRow>
-          );
-        })}
-      </TableBody>
-      </Table>
+          </TableHead>
+          <TableBody>
+            {transactions.map((transaction) => (
+              <TableRow key={transaction.id} hover selected={selectedIds.has(transaction.id)} tabIndex={-1}
+                onClick={(event) => { event.currentTarget.focus(); openEditor(transaction); }} sx={{ cursor: 'pointer' }}>
+                <TableCell padding="checkbox" onClick={(event) => event.stopPropagation()}>
+                  <Checkbox checked={selectedIds.has(transaction.id)} onChange={() => toggleSelected(transaction.id)}
+                    inputProps={{ 'aria-label': `Select ${transaction.merchant_name ?? transaction.description}` }} />
+                </TableCell>
+                <TableCell sx={{ whiteSpace: 'nowrap' }}>{transaction.date}</TableCell>
+                <TableCell sx={{ maxWidth: 330 }}>
+                  <Typography fontWeight={600}>{transaction.merchant_name ?? transaction.description}</Typography>
+                  {transaction.merchant_name ? <Typography variant="body2" color="text.secondary">{transaction.description}</Typography> : null}
+                  <Stack direction="row" spacing={0.5} flexWrap="wrap" useFlexGap sx={{ mt: 0.5 }}>
+                    {transaction.pending ? <Chip size="small" label="Pending" variant="outlined" /> : null}
+                    {transaction.source === 'manual' ? <Chip size="small" label="Manual" variant="outlined" /> : null}
+                    {transaction.credit_card_payment_link || transaction.budget_exclusion ? <Chip size="small" color="secondary" label="CC payment" variant="outlined" /> : null}
+                    {transaction.budget_group ? <Chip size="small" label={transaction.budget_group.name} variant="outlined" /> : null}
+                  </Stack>
+                  {transaction.notes ? <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 0.5 }}>{transaction.notes}</Typography> : null}
+                </TableCell>
+                <TableCell>{transaction.accounts?.name ?? '—'}</TableCell>
+                <TableCell align="right" sx={{ whiteSpace: 'nowrap', fontWeight: 650, color: transaction.amount_cents < 0 ? 'success.main' : 'text.primary' }}>{formatCurrency(transaction.amount_cents)}</TableCell>
+                <TableCell>
+                  {transaction.transaction_split_count > 0 ? <Chip size="small" color="secondary" variant="outlined" label={`${transaction.transaction_split_count} splits`} />
+                    : transaction.category_id ? categories.find((category) => category.id === transaction.category_id)?.name ?? 'Category unavailable'
+                    : <Chip size="small" color="warning" variant="outlined" label="Uncategorized" />}
+                </TableCell>
+                <TableCell><Stack direction="row" spacing={0.5} flexWrap="wrap" useFlexGap>
+                  {transaction.transaction_tag_ids.map((id) => <Chip key={id} size="small" variant="outlined" label={tagOptions.find((tag) => tag.id === id)?.name ?? 'Tag unavailable'} />)}
+                </Stack></TableCell>
+                <TableCell align="right">
+                  <Button size="small" startIcon={<EditOutlinedIcon />} aria-label={`Edit ${transaction.merchant_name ?? transaction.description}`}
+                    onClick={(event) => { event.stopPropagation(); openEditor(transaction); }}>Edit</Button>
+                </TableCell>
+              </TableRow>
+            ))}
+          </TableBody>
+        </Table>
       </TableContainer>
+      {editorSession ? (
+        <CategorizationModeButton key={editorSession.initial.id} transactions={editorSession.transactions} categories={categories} tags={tagOptions}
+          budgetGroups={budgetGroupOptions} accounts={accounts} initialTransaction={editorSession.initial}
+          onEditorClose={() => setEditorSession(null)} onSaved={() => setNotice('Transaction saved.')} />
+      ) : null}
+      <Dialog open={discardBulk} onClose={() => setDiscardBulk(false)} aria-labelledby="discard-bulk-title">
+        <DialogTitle id="discard-bulk-title">Discard bulk changes?</DialogTitle>
+        <DialogContent>The selected transactions have not been changed.</DialogContent>
+        <DialogActions>
+          <Button onClick={() => setDiscardBulk(false)}>Keep editing</Button>
+          <Button color="error" onClick={() => {
+            setDiscardBulk(false); setBulkEditorOpen(false); setApplyBulkCategory(false); setApplyBulkTags(false); setApplyBulkBudgetGroup(false);
+            setBulkCategoryId(''); setBulkTagIds([]); setBulkBudgetGroupId(''); setBulkBudgetGroupName('');
+          }}>Discard changes</Button>
+        </DialogActions>
+      </Dialog>
+      <Snackbar open={Boolean(notice)} autoHideDuration={4000} onClose={() => setNotice('')} message={notice} />
     </>
   );
 }

@@ -4,13 +4,12 @@ import {
   Button,
   Container,
   Divider,
-  MenuItem,
   Paper,
   Stack,
-  TextField,
   Typography,
 } from '@mui/material';
 import Link from '@/components/common/Link';
+import TransactionFilters from '@/components/transactions/TransactionFilters';
 import CategorizationModeButton from '@/components/transactions/CategorizationModeButton';
 import TransactionsTable, { AmazonTransactionMatch, EditableTransactionRow } from '@/components/transactions/TransactionsTable';
 import ManualTransactionDialog, { type ManualTransactionAccountOption } from '@/components/transactions/ManualTransactionDialog';
@@ -238,10 +237,22 @@ export default async function TransactionsPage({ searchParams: searchParamsPromi
     household && transactionIds.length > 0
       ? await supabase.from('transaction_tags').select('transaction_id, tag_id').in('transaction_id', transactionIds)
       : { data: [] };
-  const { data: transactionSplitRows } =
+  const { data: transactionSplitRows, error: transactionSplitsError } =
     household && transactionIds.length > 0
-      ? await supabase.from('transaction_splits').select('transaction_id').in('transaction_id', transactionIds)
-      : { data: [] };
+      ? await supabase.from('transaction_splits').select('id, transaction_id, amount_cents, category_id, notes, sort_order').in('transaction_id', transactionIds).order('sort_order')
+      : { data: [], error: null };
+  if (transactionSplitsError) throw new Error(transactionSplitsError.message);
+  const splitIds = (transactionSplitRows ?? []).map((split) => split.id);
+  const { data: splitTagRows, error: splitTagsError } = splitIds.length > 0
+    ? await supabase.from('transaction_split_tags').select('transaction_split_id, tag_id').in('transaction_split_id', splitIds)
+    : { data: [], error: null };
+  if (splitTagsError) throw new Error(splitTagsError.message);
+  const splitsByTransactionId = new Map<string, NonNullable<EditableTransactionRow['transaction_splits']>>();
+  (transactionSplitRows ?? []).forEach((split) => {
+    splitsByTransactionId.set(split.transaction_id, [...(splitsByTransactionId.get(split.transaction_id) ?? []), {
+      ...split, tag_ids: (splitTagRows ?? []).filter((tag) => tag.transaction_split_id === split.id).map((tag) => tag.tag_id),
+    }]);
+  });
   const tagIdsByTransactionId = new Map<string, string[]>();
   ((transactionTagRows ?? []) as TransactionTag[]).forEach((transactionTag) => {
     const currentTagIds = tagIdsByTransactionId.get(transactionTag.transaction_id) ?? [];
@@ -258,6 +269,7 @@ export default async function TransactionsPage({ searchParams: searchParamsPromi
     ...transaction,
     transaction_tag_ids: tagIdsByTransactionId.get(transaction.id) ?? [],
     transaction_split_count: splitCountByTransactionId.get(transaction.id) ?? 0,
+    transaction_splits: splitsByTransactionId.get(transaction.id) ?? [],
     fun_money_allocations: [],
   })) as EditableTransactionRow[];
   const uncategorizedTransactions = (uncategorizedRows ?? [])
@@ -410,11 +422,15 @@ export default async function TransactionsPage({ searchParams: searchParamsPromi
     );
 
   const amazonMatchByTransactionId = new Map<string, AmazonTransactionMatch>();
-  if (household && uncategorizedTransactionsWithoutPayments.length > 0) {
-    const dates = uncategorizedTransactionsWithoutPayments.map((transaction) => transaction.date).sort();
+  const amazonCandidates = Array.from(new Map([
+    ...uncategorizedTransactionsWithoutPayments,
+    ...transactionsWithPaymentMetadata.filter((transaction) => /amazon|amzn|whole foods/i.test(transaction.merchant_name ?? transaction.description)),
+  ].map((transaction) => [transaction.id, transaction])).values());
+  if (household && amazonCandidates.length > 0) {
+    const dates = amazonCandidates.map((transaction) => transaction.date).sort();
     const amountCandidates = Array.from(
       new Set(
-        uncategorizedTransactionsWithoutPayments.flatMap((transaction) =>
+        amazonCandidates.flatMap((transaction) =>
           getAmazonMatchAmountCandidates(transaction.amount_cents)
         )
       )
@@ -452,7 +468,7 @@ export default async function TransactionsPage({ searchParams: searchParamsPromi
     });
 
     const paymentIdByTransactionId = matchAmazonPaymentsToTransactions(
-      uncategorizedTransactionsWithoutPayments.map((transaction) => ({
+      amazonCandidates.map((transaction) => ({
         id: transaction.id,
         date: transaction.date,
         amountCents: transaction.amount_cents,
@@ -467,7 +483,7 @@ export default async function TransactionsPage({ searchParams: searchParamsPromi
     );
     const paymentById = new Map(amazonPayments.map((payment) => [payment.id, payment]));
 
-    uncategorizedTransactionsWithoutPayments.forEach((transaction) => {
+    amazonCandidates.forEach((transaction) => {
       const match = paymentById.get(paymentIdByTransactionId.get(transaction.id) ?? '');
       if (match) {
         amazonMatchByTransactionId.set(transaction.id, createAmazonMatch(match, orderById, itemsByOrderId));
@@ -509,55 +525,18 @@ export default async function TransactionsPage({ searchParams: searchParamsPromi
           <Box sx={{ p: 3 }}>
             <Typography variant="h6">Latest transactions</Typography>
             <Typography variant="body2" color="text.secondary">
-              Showing {resultStart}-{resultEnd} of {totalTransactionCount} transactions. Save changes per row as you
-              categorize and annotate.
+              Showing {resultStart}–{resultEnd} of {totalTransactionCount} transactions.
             </Typography>
-            <Box component="form" action="/transactions" method="get" sx={{ mt: 2 }}>
-              <Stack direction={{ xs: 'column', lg: 'row' }} spacing={1.5} alignItems={{ xs: 'stretch', lg: 'center' }}>
-                <TextField size="small" name="q" label="Search" defaultValue={searchText} />
-                <TextField size="small" name="from" label="From" type="date" defaultValue={fromDate} InputLabelProps={{ shrink: true }} />
-                <TextField size="small" name="to" label="To" type="date" defaultValue={toDate} InputLabelProps={{ shrink: true }} />
-                <TextField size="small" select name="accountId" label="Account" defaultValue={selectedAccountId} sx={{ minWidth: 180 }}>
-                  <MenuItem value="">All accounts</MenuItem>
-                  {accountOptions.map((account) => (
-                    <MenuItem key={account.id} value={account.id}>
-                      {account.name}
-                    </MenuItem>
-                  ))}
-                </TextField>
-                <TextField size="small" select name="categoryId" label="Category" defaultValue={selectedCategoryId} sx={{ minWidth: 190 }}>
-                  <MenuItem value="">All categories</MenuItem>
-                  <MenuItem value="uncategorized">Uncategorized</MenuItem>
-                  {categories.map((category) => (
-                    <MenuItem key={category.id} value={category.id}>
-                      {category.name}
-                    </MenuItem>
-                  ))}
-                </TextField>
-                <TextField size="small" select name="sort" label="Sort" defaultValue={sortColumn} sx={{ minWidth: 150 }}>
-                  <MenuItem value="date">Date</MenuItem>
-                  <MenuItem value="amount_cents">Amount</MenuItem>
-                  <MenuItem value="merchant_name">Merchant</MenuItem>
-                  <MenuItem value="description">Description</MenuItem>
-                </TextField>
-                <TextField size="small" select name="dir" label="Direction" defaultValue={sortDirection} sx={{ minWidth: 130 }}>
-                  <MenuItem value="desc">Desc</MenuItem>
-                  <MenuItem value="asc">Asc</MenuItem>
-                </TextField>
-                <Button type="submit" variant="contained">
-                  Apply
-                </Button>
-                <Button component={Link} href="/transactions" variant="outlined">
-                  Reset
-                </Button>
-              </Stack>
-            </Box>
+            <Box sx={{ mt: 2 }}><TransactionFilters
+              values={{ q: searchText, from: fromDate, to: toDate, accountId: selectedAccountId, categoryId: selectedCategoryId, sort: sortColumn, dir: sortDirection }}
+              accounts={accountOptions} categories={categories}
+            /></Box>
           </Box>
           <Divider />
           {transactions.length > 0 ? (
             <>
               <TransactionsTable
-                transactions={transactionsWithPaymentMetadata}
+                transactions={transactionsWithPaymentMetadata.map((transaction) => ({ ...transaction, amazon_match: amazonMatchByTransactionId.get(transaction.id) ?? null }))}
                 categories={categories}
                 tags={tags}
                 accounts={accountOptions}
@@ -587,7 +566,12 @@ export default async function TransactionsPage({ searchParams: searchParamsPromi
             </>
           ) : (
             <Box sx={{ p: 3 }}>
-              <Typography color="text.secondary">No transactions synced yet.</Typography>
+              <Typography color="text.secondary">
+                {searchText || fromDate || toDate || selectedAccountId || selectedCategoryId ? 'No transactions match these filters.' : 'No transactions yet. Add a transaction or connect an account to get started.'}
+              </Typography>
+              <Button component={Link} href={searchText || fromDate || toDate || selectedAccountId || selectedCategoryId ? '/transactions' : '/accounts'} sx={{ mt: 1 }}>
+                {searchText || fromDate || toDate || selectedAccountId || selectedCategoryId ? 'Clear filters' : 'Manage accounts'}
+              </Button>
             </Box>
           )}
         </Paper>

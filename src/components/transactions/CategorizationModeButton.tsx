@@ -32,11 +32,17 @@ import { allocateAmazonSplitAmounts } from '@/lib/amazonSplitAllocation';
 import { formatCurrency, parseCurrencyToCents } from '@/lib/money';
 import type { BudgetTransactionGroup, Category, Tag } from '@/types/database';
 import TagAutocomplete from './TagAutocomplete';
+import CategoryPicker from './CategoryPicker';
 import CreditCardPaymentLinkButton from './CreditCardPaymentLinkButton';
 import FunMoneyAllocationButton from './FunMoneyAllocationButton';
+import ManualTransactionDialog, { type ManualTransactionAccountOption } from './ManualTransactionDialog';
 import type { EditableTransactionRow } from './TransactionsTable';
 
 interface CategorizationModeButtonProps {
+  initialTransaction?: EditableTransactionRow;
+  onEditorClose?: () => void;
+  onSaved?: (transactionId: string) => void;
+  accounts?: ManualTransactionAccountOption[];
   transactions: EditableTransactionRow[];
   categories: Pick<
     Category,
@@ -85,8 +91,11 @@ function createDraft(transaction: EditableTransactionRow | undefined): Draft {
     notes: transaction?.notes ?? '',
     tagIds: transaction?.transaction_tag_ids ?? [],
     tagNames: [],
-    isSplit: false,
-    splits: firstSplit ? [firstSplit] : [],
+    isSplit: Boolean(transaction?.transaction_splits?.length),
+    splits: transaction?.transaction_splits?.length ? transaction.transaction_splits.map((split) => ({
+      amount: formatCurrency(split.amount_cents).replace('$', ''),
+      categoryId: split.category_id ?? '', notes: split.notes ?? '', tagIds: split.tag_ids, tagNames: [],
+    })) : firstSplit ? [firstSplit] : [],
   };
 }
 
@@ -311,19 +320,41 @@ export default function CategorizationModeButton({
   categories,
   tags,
   budgetGroups,
+  initialTransaction, onEditorClose, onSaved, accounts,
 }: CategorizationModeButtonProps) {
   const router = useRouter();
   const [tagOptions, setTagOptions] = useState(tags);
   const [budgetGroupOptions, setBudgetGroupOptions] = useState(budgetGroups);
-  const [isOpen, setIsOpen] = useState(false);
-  const [sessionTransactions, setSessionTransactions] = useState<EditableTransactionRow[]>([]);
-  const [currentTransaction, setCurrentTransaction] = useState<EditableTransactionRow>();
+  const [isOpen, setIsOpen] = useState(Boolean(initialTransaction));
+  const [sessionTransactions, setSessionTransactions] = useState<EditableTransactionRow[]>(() => initialTransaction ? transactions.slice(transactions.findIndex((transaction) => transaction.id === initialTransaction.id)) : []);
+  const [currentTransaction, setCurrentTransaction] = useState<EditableTransactionRow | undefined>(initialTransaction);
   const [completedIds, setCompletedIds] = useState<Set<string>>(new Set());
   const [skippedIds, setSkippedIds] = useState<Set<string>>(new Set());
   const [skippedHistory, setSkippedHistory] = useState<EditableTransactionRow[]>([]);
-  const [draft, setDraft] = useState<Draft>(() => createDraft(undefined));
+  const [draft, setDraft] = useState<Draft>(() => createDraft(initialTransaction));
   const [isSaving, setIsSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [discardAction, setDiscardAction] = useState<(() => void) | null>(null);
+  const dirty = JSON.stringify(draft) !== JSON.stringify(createDraft(currentTransaction));
+
+  useEffect(() => {
+    if (!isOpen || !dirty) return;
+    const warn = (event: BeforeUnloadEvent) => { event.preventDefault(); event.returnValue = ''; };
+    window.addEventListener('beforeunload', warn);
+    return () => window.removeEventListener('beforeunload', warn);
+  }, [dirty, isOpen]);
+
+  function withDiscard(action: () => void) {
+    if (isSaving) return;
+    if (dirty) setDiscardAction(() => action);
+    else action();
+  }
+
+  function finishEditing() {
+    setIsOpen(false);
+    onEditorClose?.();
+    router.refresh();
+  }
 
   const incomeCategoryId =
     categories.find((category) => category.is_income && category.name.toLowerCase() === 'income transfers')?.id ??
@@ -383,8 +414,7 @@ export default function CategorizationModeButton({
   }
 
   function closeDialog() {
-    setIsOpen(false);
-    router.refresh();
+    withDiscard(finishEditing);
   }
 
   function moveToNext(nextCompletedIds: Set<string>, nextSkippedIds = skippedIds) {
@@ -398,17 +428,16 @@ export default function CategorizationModeButton({
     setDraft(createDraft(nextTransaction));
 
     if (!nextTransaction) {
-      setIsOpen(false);
-      router.refresh();
+      finishEditing();
     }
   }
 
-  async function saveAndNext() {
-    if (!currentTransaction) {
+  async function saveAndNext(advance = !initialTransaction) {
+    if (!currentTransaction || isSaving) {
       return;
     }
 
-    if (!draft.isSplit && !draft.categoryId) {
+    if (!initialTransaction && !draft.isSplit && !draft.categoryId) {
       setError('Choose a category before saving.');
       return;
     }
@@ -462,56 +491,65 @@ export default function CategorizationModeButton({
     setIsSaving(true);
     setError(null);
 
-    const response = await fetch(`/api/transactions/${currentTransaction.id}`, {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        budget_group_id:
-          draft.budgetGroupId && draft.budgetGroupId !== CREATE_BUDGET_GROUP_VALUE
-            ? draft.budgetGroupId
-            : null,
-        budget_group_name:
-          draft.budgetGroupId === CREATE_BUDGET_GROUP_VALUE ? draft.budgetGroupName : null,
-        category_id: draft.isSplit ? null : draft.categoryId || null,
-        notes: draft.isSplit ? null : draft.notes,
-        tag_ids: draft.isSplit ? [] : draft.tagIds,
-        tag_names: draft.isSplit ? [] : draft.tagNames,
-        splits: splitPayload,
-      }),
-    });
-    const data = (await response.json()) as {
-      budget_group?: Pick<BudgetTransactionGroup, 'id' | 'name'> | null;
-      error?: string;
-      tags?: Pick<Tag, 'id' | 'name' | 'color'>[];
-    };
-
-    setIsSaving(false);
-
-    if (!response.ok) {
-      setError(data.error ?? 'Unable to save transaction.');
-      return;
-    }
-
-    if (data.tags?.length) {
-      setTagOptions((currentTags) => {
-        const tagById = new Map(currentTags.map((tag) => [tag.id, tag]));
-        data.tags?.forEach((tag) => tagById.set(tag.id, tag));
-        return Array.from(tagById.values()).sort((a, b) => a.name.localeCompare(b.name));
+    try {
+      const response = await fetch(`/api/transactions/${currentTransaction.id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          budget_group_id:
+            draft.budgetGroupId && draft.budgetGroupId !== CREATE_BUDGET_GROUP_VALUE
+              ? draft.budgetGroupId
+              : null,
+          budget_group_name:
+            draft.budgetGroupId === CREATE_BUDGET_GROUP_VALUE ? draft.budgetGroupName : null,
+          category_id: draft.isSplit ? null : draft.categoryId || null,
+          notes: draft.isSplit ? null : draft.notes,
+          tag_ids: draft.isSplit ? [] : draft.tagIds,
+          tag_names: draft.isSplit ? [] : draft.tagNames,
+          splits: splitPayload ?? (currentTransaction.transaction_split_count > 0 ? [] : undefined),
+        }),
       });
-    }
+      const data = (await response.json().catch(() => ({}))) as {
+        budget_group?: Pick<BudgetTransactionGroup, 'id' | 'name'> | null;
+        error?: string;
+        tags?: Pick<Tag, 'id' | 'name' | 'color'>[];
+      };
 
-    if (data.budget_group) {
-      setBudgetGroupOptions((currentGroups) => {
-        const groupById = new Map(currentGroups.map((group) => [group.id, group]));
-        groupById.set(data.budget_group!.id, data.budget_group!);
-        return Array.from(groupById.values()).sort((left, right) => left.name.localeCompare(right.name));
-      });
-    }
+      setIsSaving(false);
 
-    const nextCompletedIds = new Set(completedIds);
-    nextCompletedIds.add(currentTransaction.id);
-    moveToNext(nextCompletedIds);
-    router.refresh();
+      if (!response.ok) {
+        setError(data.error ?? 'Unable to save transaction.');
+        return;
+      }
+
+      if (data.tags?.length) {
+        setTagOptions((currentTags) => {
+          const tagById = new Map(currentTags.map((tag) => [tag.id, tag]));
+          data.tags?.forEach((tag) => tagById.set(tag.id, tag));
+          return Array.from(tagById.values()).sort((a, b) => a.name.localeCompare(b.name));
+        });
+      }
+
+      if (data.budget_group) {
+        setBudgetGroupOptions((currentGroups) => {
+          const groupById = new Map(currentGroups.map((group) => [group.id, group]));
+          groupById.set(data.budget_group!.id, data.budget_group!);
+          return Array.from(groupById.values()).sort((left, right) => left.name.localeCompare(right.name));
+        });
+      }
+
+      onSaved?.(currentTransaction.id);
+      if (advance) {
+        const nextCompletedIds = new Set(completedIds);
+        nextCompletedIds.add(currentTransaction.id);
+        moveToNext(nextCompletedIds);
+        router.refresh();
+      } else finishEditing();
+    } catch {
+      setError('Unable to reach the server. Your changes are kept; try saving again.');
+    } finally {
+      setIsSaving(false);
+    }
   }
 
   function skip() {
@@ -532,6 +570,8 @@ export default function CategorizationModeButton({
       return;
     }
 
+    if (dirty) { router.refresh(); return; }
+    if (initialTransaction) { finishEditing(); return; }
     const nextCompletedIds = new Set(completedIds);
     nextCompletedIds.add(currentTransaction.id);
     nextCompletedIds.add(counterpartTransactionId);
@@ -539,6 +579,8 @@ export default function CategorizationModeButton({
   }
 
   function completeCurrentAfterPaymentMark() {
+    if (dirty) { router.refresh(); return; }
+    if (initialTransaction) { finishEditing(); return; }
     if (!currentTransaction) {
       return;
     }
@@ -569,16 +611,17 @@ export default function CategorizationModeButton({
 
   return (
     <>
-      <Button
+      {!initialTransaction ? <Button
         variant="outlined"
         startIcon={<PlaylistAddCheckIcon />}
         disabled={transactions.length === 0}
         onClick={openDialog}
       >
         Categorize uncategorized ({transactions.length})
-      </Button>
+      </Button> : null}
       <Dialog
         open={isOpen}
+        aria-labelledby="transaction-editor-title"
         onClose={closeDialog}
         fullWidth
         maxWidth="sm"
@@ -591,11 +634,14 @@ export default function CategorizationModeButton({
           },
         }}
       >
-        <DialogTitle>Categorize uncategorized</DialogTitle>
+        <DialogTitle id="transaction-editor-title">
+          {initialTransaction ? 'Edit transaction' : 'Categorize uncategorized'}
+          {dirty ? <Typography component="span" variant="caption" color="text.secondary" sx={{ ml: 2 }}>Unsaved changes</Typography> : null}
+        </DialogTitle>
         <DialogContent dividers>
           {currentTransaction ? (
-            <Stack spacing={2.5}>
-              <Box>
+            <Stack key={currentTransaction.id} component="fieldset" disabled={isSaving} spacing={2.5} sx={{ border: 0, p: 0, m: 0, minWidth: 0 }}>
+              {!initialTransaction ? <Box>
                 <Stack direction="row" justifyContent="space-between" spacing={2} sx={{ mb: 1 }}>
                   <Typography variant="body2" color="text.secondary">
                     {progressCount} of {totalCount} done
@@ -607,7 +653,7 @@ export default function CategorizationModeButton({
                   ) : null}
                 </Stack>
                 <LinearProgress variant="determinate" value={totalCount ? (progressCount / totalCount) * 100 : 0} />
-              </Box>
+              </Box> : null}
 
               <Box>
                 <Stack direction="row" justifyContent="space-between" alignItems="flex-start" spacing={2}>
@@ -637,6 +683,13 @@ export default function CategorizationModeButton({
                   <Chip size="small" label={currentTransaction.pending ? 'Pending' : 'Posted'} />
                 </Stack>
               </Box>
+
+              {accounts && currentTransaction.source === 'manual' ? (
+                <Box>
+                  <ManualTransactionDialog accounts={accounts} categories={categories} transaction={currentTransaction} compact disabled={dirty || isSaving} onSaved={finishEditing} />
+                  {dirty ? <Typography variant="caption" color="text.secondary">Save or cancel your changes before editing the manual date, amount, or account.</Typography> : null}
+                </Box>
+              ) : null}
 
               <CreditCardPaymentLinkButton
                 transactionId={currentTransaction.id}
@@ -882,26 +935,21 @@ export default function CategorizationModeButton({
               <Stack spacing={2}>
                 {!draft.isSplit ? (
                   <>
-                    <Select
-                      size="small"
-                      fullWidth
-                      displayEmpty
+                    <CategoryPicker
+                      categories={categories}
+                      label="Transaction category"
+                      autoFocus
                       value={draft.categoryId}
-                      onChange={(event) => setDraft((current) => ({ ...current, categoryId: event.target.value }))}
-                    >
-                      <MenuItem value="">Choose category</MenuItem>
-                      {categories.map((category) => (
-                        <MenuItem key={category.id} value={category.id}>
-                          {category.name}
-                        </MenuItem>
-                      ))}
-                    </Select>
+                      onChange={(categoryId) => setDraft((current) => ({ ...current, categoryId }))}
+                      emptyLabel="Choose category"
+                    />
 
                     <Box>
                       <Select
                         size="small"
                         fullWidth
                         displayEmpty
+                        inputProps={{ 'aria-label': 'Budget group' }}
                         value={draft.budgetGroupId}
                         onChange={(event) =>
                           setDraft((current) => ({
@@ -960,6 +1008,7 @@ export default function CategorizationModeButton({
                       fullWidth
                       multiline
                       minRows={3}
+                      label="Notes"
                       value={draft.notes}
                       onChange={(event) => setDraft((current) => ({ ...current, notes: event.target.value }))}
                       placeholder="Note"
@@ -1013,29 +1062,21 @@ export default function CategorizationModeButton({
                               }
                               sx={{ width: { xs: '100%', sm: 130 } }}
                             />
-                            <Select
-                              size="small"
-                              fullWidth
-                              displayEmpty
+                            <CategoryPicker
+                              categories={categories}
+                              label={`Category for split ${index + 1}`}
+                              autoFocus={index === 0}
                               value={split.categoryId}
-                              onChange={(event) =>
+                              onChange={(categoryId) =>
                                 setDraft((current) => ({
                                   ...current,
                                   splits: current.splits.map((currentSplit, splitIndex) =>
-                                    splitIndex === index
-                                      ? { ...currentSplit, categoryId: event.target.value }
-                                      : currentSplit
+                                    splitIndex === index ? { ...currentSplit, categoryId } : currentSplit
                                   ),
                                 }))
                               }
-                            >
-                              <MenuItem value="">Choose category</MenuItem>
-                              {categories.map((category) => (
-                                <MenuItem key={category.id} value={category.id}>
-                                  {category.name}
-                                </MenuItem>
-                              ))}
-                            </Select>
+                              emptyLabel="Choose category"
+                            />
                           </Stack>
                           <TagAutocomplete
                             tags={tagOptions}
@@ -1136,25 +1177,38 @@ export default function CategorizationModeButton({
           )}
         </DialogContent>
         <DialogActions>
-          <Button onClick={closeDialog}>Close</Button>
+          <Button onClick={closeDialog} disabled={isSaving}>{initialTransaction ? 'Cancel' : 'Close'}</Button>
+          {!initialTransaction ? <>
           <Button
             startIcon={<KeyboardBackspaceIcon />}
-            onClick={goBackToSkipped}
+            onClick={() => withDiscard(goBackToSkipped)}
             disabled={skippedHistory.length === 0 || isSaving}
           >
             Back
           </Button>
-          <Button startIcon={<SkipNextIcon />} onClick={skip} disabled={!currentTransaction || isSaving}>
+          <Button startIcon={<SkipNextIcon />} onClick={() => withDiscard(skip)} disabled={!currentTransaction || isSaving}>
             Skip
           </Button>
-          <Button
+          </> : null}
+          {initialTransaction ? <Button variant="contained" onClick={() => void saveAndNext(false)} disabled={!currentTransaction || isSaving}>
+            {isSaving ? 'Saving…' : 'Save changes'}
+          </Button> : null}
+          {!initialTransaction ? <Button
             variant="contained"
             startIcon={<CheckIcon />}
             onClick={() => void saveAndNext()}
             disabled={!currentTransaction || isSaving}
           >
             {isSaving ? 'Saving...' : 'Save and next'}
-          </Button>
+          </Button> : null}
+        </DialogActions>
+      </Dialog>
+      <Dialog open={Boolean(discardAction)} onClose={() => setDiscardAction(null)} aria-labelledby="discard-editor-title">
+        <DialogTitle id="discard-editor-title">Discard unsaved changes?</DialogTitle>
+        <DialogContent>Your changes to this transaction have not been saved.</DialogContent>
+        <DialogActions>
+          <Button onClick={() => setDiscardAction(null)}>Keep editing</Button>
+          <Button color="error" onClick={() => { const action = discardAction; setDiscardAction(null); action?.(); }}>Discard changes</Button>
         </DialogActions>
       </Dialog>
     </>
